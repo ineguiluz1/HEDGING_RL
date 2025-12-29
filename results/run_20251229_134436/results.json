@@ -1,0 +1,25 @@
+{
+  "mode": "montecarlo",
+  "num_train_trajectories": 600,
+  "rl_agent": {
+    "total_reward": -5.662617090247012,
+    "cumulative_pnl": 8672.991885441661,
+    "sharpe_ratio": -1.0791302552789448,
+    "mean_action": -0.9814562201499939,
+    "std_action": 0.055321112275123596,
+    "steps": 5503
+  },
+  "benchmark": {
+    "cumulative_pnl": 87.33657143795918,
+    "cumulative_reward": -81311.19602701558,
+    "sharpe_ratio": 0.018619901636648294,
+    "mean_delta": 0.4292343345260646,
+    "std_delta": 0.33049176944366976
+  },
+  "improvements": {
+    "pnl": 8585.655314003701,
+    "sharpe": -1.0977501569155932
+  },
+  "model_path": "results/run_20251229_134436/td3_model.pth",
+  "results_dir": "results/run_20251229_134436"
+}

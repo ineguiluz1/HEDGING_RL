@@ -1,0 +1,34 @@
+{
+  "train_years": [
+    2005,
+    2006,
+    2007,
+    2008,
+    2009,
+    2010
+  ],
+  "validation_year": 2011,
+  "test_year": 2012,
+  "num_epochs": 1,
+  "rl_agent": {
+    "total_reward": -49.53226902690827,
+    "cumulative_pnl": -403.8621115268869,
+    "sharpe_ratio": -14.805306461883662,
+    "mean_action": -0.3008401095867157,
+    "std_action": 0.2759649157524109,
+    "steps": 17566
+  },
+  "benchmark": {
+    "cumulative_pnl": -796.4375847781525,
+    "cumulative_reward": -804.4840500563097,
+    "sharpe_ratio": -16.054039657872597,
+    "mean_delta": 0.6199775565804273,
+    "std_delta": 0.45252461447402026
+  },
+  "improvements": {
+    "pnl": 392.57547325126563,
+    "sharpe": 1.248733195988935
+  },
+  "model_path": "results/run_20251229_102127/td3_model.pth",
+  "results_dir": "results/run_20251229_102127"
+}

@@ -87,10 +87,10 @@ def generate_historical_hedging_data(
     csv_path,
     r=0.02,
     vol_window=20, # Ventana de volatilidad (aprox 1 mes en datos diarios)
-    resample_intraday=True 
 ):
     """
-    Genera el dataset de entrenamiento usando el S&P 500 histórico como referencia.
+    Genera el dataset usando el S&P 500 histórico como referencia.
+    DATOS DIARIOS SIN INTERPOLACIÓN para movimientos más realistas.
     """
     
     print(f"Cargando datos históricos desde {csv_path}...")
@@ -99,25 +99,9 @@ def generate_historical_hedging_data(
     if S_series is None:
         return None
 
-    # Interpolación para simular frecuencia de 30 min (Paper usa datos intradía) 
-    if resample_intraday:
-        print(f"Upsampling de {len(S_series)} datos diarios a intervalos de 30 min...")
-        # Asumiendo 6.5 horas de mercado (13 barras de 30 min)
-        # Resampleamos a 30min y rellenamos linealmente
-        # Solo mantenemos horas de mercado aproximadas (9:30 - 16:00) para no generar noches gigantes
-        
-        # Truco simple: Resample total y luego borrar fines de semana/noches vacías
-        # Ojo: interpolate linear funciona bien para generar continuidad suave
-        S_series = S_series.resample('30T').interpolate(method='linear')
-        
-        # Eliminamos los NaNs generados al principio o final
-        S_series = S_series.dropna()
-        
-        # Ajuste de factor de anualización para volatilidad intradía
-        annualization_factor = np.sqrt(13 * 252)
-    else:
-        print("Usando frecuencia original del CSV (Diaria).")
-        annualization_factor = np.sqrt(252)
+    # Usar datos diarios sin interpolación
+    print(f"Usando {len(S_series)} datos diarios (sin interpolación).")
+    annualization_factor = np.sqrt(252)  # Factor para volatilidad anualizada
 
     # Convertir a numpy
     S = S_series.values
@@ -179,17 +163,15 @@ if __name__ == "__main__":
     output_csv = os.path.join(ROOT, "data", "historical_hedging_data.csv")
     
     if os.path.exists(input_csv):
-        # Generamos los datos. 'resample_intraday=True' crea los pasos de 30 min
-        # interpolando tus datos diarios para imitar el paper.
+        # Generamos los datos diarios (sin interpolación)
         df_hist = generate_historical_hedging_data(
             input_csv, 
-            vol_window=50, 
-            resample_intraday=True 
+            vol_window=20,
         )
         
         if df_hist is not None:
             df_hist.to_csv(output_csv, index=False)
-            print(f"\n¡Éxito! Dataset generado con {len(df_hist)} filas.")
+            print(f"\n¡Éxito! Dataset generado con {len(df_hist)} filas (datos diarios).")
             print(f"Guardado en: {output_csv}")
             print("Primeras filas:")
             print(df_hist[['timestamp', 'underlying_price', 'option_price', 'realized_volatility']].head())
