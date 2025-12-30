@@ -1,0 +1,28 @@
+{
+  "mode": "montecarlo",
+  "num_train_trajectories": 6000,
+  "episode_length_train": 30,
+  "episode_length_test": 30,
+  "use_windowed_test": true,
+  "num_test_episodes": 183,
+  "rl_agent": {
+    "total_pnl": 0.2230232065820087,
+    "sharpe_ratio": 1.0806635583429225,
+    "mean_action": 1.0,
+    "std_action": 0.0,
+    "mean_episode_pnl": 0.0012187060468962208,
+    "std_episode_pnl": 0.056323641114141544
+  },
+  "benchmark": {
+    "total_pnl": -1.2833820616180334,
+    "sharpe_ratio": 0.03399432439526531,
+    "mean_episode_pnl": -0.007013016730153187,
+    "mean_delta": 0.5637664244904098
+  },
+  "improvements": {
+    "pnl": 1.5064052682000422,
+    "sharpe": 1.046669233947657
+  },
+  "model_path": "results/run_20251230_120411/td3_model.pth",
+  "results_dir": "results/run_20251230_120411"
+}

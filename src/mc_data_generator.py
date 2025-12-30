@@ -239,13 +239,33 @@ def generate_mc_training_data(
     rng = np.random.default_rng(seed)
     trajectories = []
     
+    # Check if using mixed drift scenarios
+    use_mixed_drift = CONFIG.get("mc_use_mixed_drift", False)
+    drift_distribution = CONFIG.get("mc_drift_distribution", {
+        "bullish": 0.33, "neutral": 0.34, "bearish": 0.33
+    })
+    drift_ranges = CONFIG.get("mc_drift_ranges", {
+        "bullish": (0.05, 0.20),
+        "neutral": (-0.05, 0.05),
+        "bearish": (-0.20, -0.05)
+    })
+    
     if verbose:
         print(f"\nGenerating {n_trajectories} Monte Carlo trajectories...")
         print(f"  Episode Length: {episode_length} trading days ({T*252:.1f} days)")
         print(f"  Initial Price: ${S0:.2f}")
-        print(f"  Drift (μ): {mu*100:.1f}%")
+        if use_mixed_drift:
+            print(f"  Drift Mode: MIXED (bullish/neutral/bearish)")
+            print(f"    - Bullish ({drift_distribution['bullish']*100:.0f}%): μ in [{drift_ranges['bullish'][0]*100:.0f}%, {drift_ranges['bullish'][1]*100:.0f}%]")
+            print(f"    - Neutral ({drift_distribution['neutral']*100:.0f}%): μ in [{drift_ranges['neutral'][0]*100:.0f}%, {drift_ranges['neutral'][1]*100:.0f}%]")
+            print(f"    - Bearish ({drift_distribution['bearish']*100:.0f}%): μ in [{drift_ranges['bearish'][0]*100:.0f}%, {drift_ranges['bearish'][1]*100:.0f}%]")
+        else:
+            print(f"  Drift (μ): {mu*100:.1f}%")
         print(f"  Volatility (σ): {sigma*100:.1f}%")
         print(f"  Simulates: Option sold at t=0, expires at t={episode_length}")
+    
+    # Track drift distribution for verification
+    drift_counts = {"bullish": 0, "neutral": 0, "bearish": 0}
     
     for i in range(n_trajectories):
         # Vary initial price significantly for each trajectory
@@ -255,6 +275,23 @@ def generate_mc_training_data(
         # Vary volatility to simulate different market conditions
         sigma_varied = sigma * rng.uniform(0.6, 1.5)
         
+        # Select drift based on mixed distribution or use fixed drift
+        if use_mixed_drift:
+            # Sample drift scenario
+            rand_val = rng.random()
+            if rand_val < drift_distribution["bullish"]:
+                scenario = "bullish"
+                mu_varied = rng.uniform(drift_ranges["bullish"][0], drift_ranges["bullish"][1])
+            elif rand_val < drift_distribution["bullish"] + drift_distribution["neutral"]:
+                scenario = "neutral"
+                mu_varied = rng.uniform(drift_ranges["neutral"][0], drift_ranges["neutral"][1])
+            else:
+                scenario = "bearish"
+                mu_varied = rng.uniform(drift_ranges["bearish"][0], drift_ranges["bearish"][1])
+            drift_counts[scenario] += 1
+        else:
+            mu_varied = mu
+        
         # Random start date for diversity (doesn't affect simulation, just timestamps)
         start_year = 2010 + i % 10
         start_month = rng.integers(1, 13)
@@ -263,7 +300,7 @@ def generate_mc_training_data(
         
         df = generate_mc_hedging_trajectory(
             S0=S0_varied,
-            mu=mu,
+            mu=mu_varied,
             sigma=sigma_varied,
             r=r,
             T=T,
@@ -281,6 +318,8 @@ def generate_mc_training_data(
     
     if verbose:
         print(f"  ✓ Generated {n_trajectories} trajectories ({episode_length} steps each)")
+        if use_mixed_drift:
+            print(f"  Drift distribution: Bullish={drift_counts['bullish']}, Neutral={drift_counts['neutral']}, Bearish={drift_counts['bearish']}")
     
     # Plot trajectories if path provided
     if plot_path is not None:

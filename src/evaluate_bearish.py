@@ -115,6 +115,7 @@ def generate_bearish_test_envs(
     mu=-0.15,  # -15% annual drift (bearish)
     sigma_range=(0.15, 0.35),
     S0_range=(80, 120),
+    norm_stats=None,  # Normalization stats from training (CRITICAL!)
     seed=42,
     verbose=True
 ):
@@ -126,6 +127,7 @@ def generate_bearish_test_envs(
         mu: Negative drift for bearish market
         sigma_range: Range of volatilities
         S0_range: Range of initial prices
+        norm_stats: Normalization statistics from training (CRITICAL for correct evaluation)
         seed: Random seed
         verbose: Print progress
     
@@ -145,9 +147,10 @@ def generate_bearish_test_envs(
         print(f"  Drift (μ): {mu*100:.1f}% annual (BEARISH)")
         print(f"  Volatility range: {sigma_range[0]*100:.0f}% - {sigma_range[1]*100:.0f}%")
         print(f"  Initial price range: ${S0_range[0]} - ${S0_range[1]}")
+        if norm_stats is not None:
+            print(f"  Using normalization stats from training")
     
     envs = []
-    norm_stats = None
     
     for i in range(n_episodes):
         # Randomize parameters
@@ -189,10 +192,6 @@ def generate_bearish_test_envs(
             normalization_stats=norm_stats,
             verbose=False
         )
-        
-        # Get normalization stats from first env
-        if i == 0 and CONFIG.get("normalize_data", True):
-            norm_stats = env.get_normalization_stats()
         
         envs.append(env)
         
@@ -414,47 +413,94 @@ def plot_comparison(rl_stats, benchmark_stats, save_path=None):
     plt.show()
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Evaluate agent on bearish market scenarios')
-    parser.add_argument('--model', type=str, required=True, help='Path to trained model')
-    parser.add_argument('--episodes', type=int, default=183, help='Number of bearish episodes')
-    parser.add_argument('--mu', type=float, default=-0.15, help='Annual drift (negative for bearish)')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed')
-    parser.add_argument('--output', type=str, default=None, help='Output path for plot')
+def load_normalization_stats(model_path):
+    """
+    Load normalization statistics saved during training.
+    These are CRITICAL for correct evaluation.
+    """
+    import json
+    model_dir = os.path.dirname(model_path)
+    norm_stats_path = os.path.join(model_dir, "normalization_stats.json")
     
-    args = parser.parse_args()
+    if os.path.exists(norm_stats_path):
+        with open(norm_stats_path, 'r') as f:
+            norm_stats = json.load(f)
+        print(f"  ✓ Loaded normalization stats from {norm_stats_path}")
+        return norm_stats
+    else:
+        print(f"  ⚠ WARNING: normalization_stats.json not found at {norm_stats_path}")
+        print(f"    Evaluation results may differ from training!")
+        return None
+
+
+def main():
+    # =========================================================================
+    # CONFIGURATION - Edit these values to change what to evaluate
+    # =========================================================================
+    MODEL_PATH = "results/run_20251230_120411/td3_model.zip"
+    N_EPISODES = 200
+    DRIFT = -0.15  # Annual drift (negative for bearish market)
+    SEED = 42
+    OUTPUT_PATH = None  # None = save next to model
+    # =========================================================================
     
     print(f"\n{'='*70}")
     print(f"BEARISH MARKET EVALUATION")
     print(f"{'='*70}")
-    print(f"Model: {args.model}")
-    print(f"Episodes: {args.episodes}")
-    print(f"Market drift: {args.mu*100:.1f}% annual")
+    print(f"Model: {MODEL_PATH}")
+    print(f"Episodes: {N_EPISODES}")
+    print(f"Market drift: {DRIFT*100:.1f}% annual")
     print(f"{'='*70}\n")
     
-    # Check model exists
-    if not os.path.exists(args.model):
-        # Try adding extensions
-        for ext in ['.pth', '.zip', '']:
-            if os.path.exists(args.model + ext):
-                args.model = args.model + ext
-                break
+    # Resolve model path (handle relative paths from workspace root)
+    model_path = MODEL_PATH
+    
+    # If path doesn't exist, try from workspace root
+    if not os.path.exists(model_path):
+        # Get workspace root (parent of src/)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        workspace_root = os.path.dirname(script_dir)
+        workspace_model_path = os.path.join(workspace_root, model_path)
+        
+        if os.path.exists(workspace_model_path):
+            model_path = workspace_model_path
         else:
-            # Try without extension in case it's already included
-            model_base = args.model.rsplit('.', 1)[0] if '.' in args.model else args.model
-            for ext in ['.zip', '.pth']:
-                if os.path.exists(model_base + ext):
-                    args.model = model_base + ext
+            # Try adding extensions
+            for ext in ['.zip', '.pth', '']:
+                if os.path.exists(model_path + ext):
+                    model_path = model_path + ext
+                    break
+                elif os.path.exists(workspace_model_path + ext):
+                    model_path = workspace_model_path + ext
                     break
             else:
-                print(f"Error: Model not found at {args.model}")
-                return
+                # Try without extension
+                model_base = model_path.rsplit('.', 1)[0] if '.' in model_path else model_path
+                workspace_base = os.path.join(workspace_root, model_base)
+                for ext in ['.zip', '.pth']:
+                    if os.path.exists(model_base + ext):
+                        model_path = model_base + ext
+                        break
+                    elif os.path.exists(workspace_base + ext):
+                        model_path = workspace_base + ext
+                        break
+                else:
+                    print(f"Error: Model not found")
+                    print(f"  Tried: {MODEL_PATH}")
+                    print(f"  Tried: {workspace_model_path}")
+                    return
+    
+    model_path_final = model_path
+    
+    # Load normalization stats from training (CRITICAL for correct evaluation)
+    norm_stats = load_normalization_stats(model_path_final)
     
     # Generate bearish test environments
     bearish_envs = generate_bearish_test_envs(
-        n_episodes=args.episodes,
-        mu=args.mu,
-        seed=args.seed,
+        n_episodes=N_EPISODES,
+        mu=DRIFT,
+        norm_stats=norm_stats,  # Use norm_stats from training!
+        seed=SEED,
         verbose=True
     )
     
@@ -464,8 +510,8 @@ def main():
     state_dim = sample_env.observation_space.shape[0]
     action_dim = sample_env.action_space.shape[0]
     agent = TD3Agent(state_dim=state_dim, action_dim=action_dim, env=sample_env)
-    agent.load(args.model)
-    print(f"  ✓ Model loaded from {args.model}")
+    agent.load(model_path_final)
+    print(f"  ✓ Model loaded from {model_path_final}")
     
     # Evaluate RL agent
     print(f"\nEvaluating RL Agent on {len(bearish_envs)} bearish episodes...")
@@ -475,9 +521,10 @@ def main():
     print(f"\nRunning Delta Hedging Benchmark...")
     # Reset environments for benchmark
     bearish_envs_bench = generate_bearish_test_envs(
-        n_episodes=args.episodes,
-        mu=args.mu,
-        seed=args.seed,
+        n_episodes=N_EPISODES,
+        mu=DRIFT,
+        norm_stats=norm_stats,  # Use same norm_stats
+        seed=SEED,
         verbose=False
     )
     benchmark_stats = run_benchmark_on_envs(bearish_envs_bench, verbose=True)
@@ -518,10 +565,10 @@ def main():
         print(f"   → Range: [{rl_stats['min_action']:.3f}, {rl_stats['max_action']:.3f}]")
     
     # Plot
-    output_path = args.output
+    output_path = OUTPUT_PATH
     if output_path is None:
         # Save next to model
-        model_dir = os.path.dirname(args.model)
+        model_dir = os.path.dirname(model_path_final)
         output_path = os.path.join(model_dir, 'bearish_evaluation.png')
     
     plot_comparison(rl_stats, benchmark_stats, save_path=output_path)

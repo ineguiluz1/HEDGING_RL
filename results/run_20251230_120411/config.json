@@ -1,0 +1,180 @@
+{
+  "transaction_cost": 0.001,
+  "risk_free_rate": 0.02,
+  "notional": 1000,
+  "risk_aversion": 0.01,
+  "action_regularization": 0.005,
+  "use_delta_tracking_reward": true,
+  "vol_window": 20,
+  "initial_vol": 0.2,
+  "use_random_initial_vol": true,
+  "initial_vol_min": 0.02,
+  "initial_vol_max": 0.1,
+  "normalize_vol": true,
+  "trading_days_per_year": 252,
+  "annualization_factor": 252,
+  "max_action": 1.0,
+  "min_action": 0.0,
+  "use_action_bounds": true,
+  "normalize_data": true,
+  "handle_missing_data": true,
+  "episodes": 1,
+  "num_episodes": 100,
+  "num_epochs": 10,
+  "update_every": 1,
+  "warmup_steps": 5000,
+  "seed": 101,
+  "training_report_interval": 1,
+  "hidden_dim": 256,
+  "leaky_relu_alpha": 0.05,
+  "tau": 0.001,
+  "gamma": 0.99,
+  "policy_noise": 0.1,
+  "noise_clip": 0.2,
+  "policy_freq": 2,
+  "actor_lr": 0.003,
+  "critic_lr": 0.003,
+  "batch_size": 256,
+  "replay_buffer_size": 100000,
+  "initial_noise": 0.5,
+  "final_noise": 0.05,
+  "noise_decay_steps": 150000,
+  "min_noise": 0.05,
+  "ou_theta": 0.15,
+  "ou_sigma": 0.2,
+  "data_path": "./data/historical_hedging_data.csv",
+  "sp500_data_path": "./data/sp500_data.csv",
+  "results_dir": "results",
+  "use_montecarlo_training": true,
+  "mc_train_trajectories": 6000,
+  "mc_episode_length": 30,
+  "mc_steps_per_year": 252,
+  "test_start_year": 2004,
+  "test_end_year": 2025,
+  "mc_use_mixed_drift": true,
+  "mc_drift_distribution": {
+    "bullish": 0.33,
+    "neutral": 0.34,
+    "bearish": 0.33
+  },
+  "mc_drift_ranges": {
+    "bullish": [
+      0.05,
+      0.2
+    ],
+    "neutral": [
+      -0.05,
+      0.05
+    ],
+    "bearish": [
+      -0.2,
+      -0.05
+    ]
+  },
+  "test_episode_length": 30,
+  "use_windowed_test": true,
+  "price_column": "mid",
+  "stock_price_column": "active_underlying_price",
+  "moneyness_column": "moneyness",
+  "ttm_column": "maturity",
+  "datetime_column": "quote_datetime",
+  "enable_tuning": false,
+  "n_search_iterations": 1,
+  "validation_metric": "pnl_sum",
+  "hyperparam_ranges": {
+    "tau": [
+      0.001,
+      0.01
+    ],
+    "gamma": [
+      0.95,
+      0.999
+    ],
+    "policy_noise": [
+      0.1,
+      0.3
+    ],
+    "noise_clip": [
+      0.2,
+      0.5
+    ],
+    "policy_freq": [
+      1,
+      5
+    ],
+    "actor_lr": [
+      1e-05,
+      0.001
+    ],
+    "critic_lr": [
+      1e-05,
+      0.001
+    ],
+    "batch_size": [
+      64,
+      512
+    ],
+    "initial_noise": [
+      0.2,
+      0.5
+    ],
+    "final_noise": [
+      0.01,
+      0.1
+    ],
+    "noise_decay_steps": [
+      50000,
+      200000
+    ],
+    "ou_theta": [
+      0.1,
+      0.3
+    ],
+    "ou_sigma": [
+      0.1,
+      0.3
+    ],
+    "vol_window": [
+      10,
+      50
+    ],
+    "initial_vol": [
+      0.1,
+      0.4
+    ],
+    "initial_vol_min": [
+      0.05,
+      0.15
+    ],
+    "initial_vol_max": [
+      0.4,
+      0.8
+    ]
+  },
+  "export_positions": true,
+  "log_q_values": true,
+  "log_q_values_training": false,
+  "use_consistent_evaluation": true,
+  "run_benchmark": true,
+  "benchmark_vol_window": 20,
+  "periods_per_year": 252,
+  "calculate_sharpe": true,
+  "calculate_information_ratio": true,
+  "calculate_max_drawdown": true,
+  "save_plots": true,
+  "plot_dpi": 300,
+  "save_detailed_results": true,
+  "verbose_evaluation": true,
+  "verbose_training": true,
+  "save_model": true,
+  "model_save_path": "results/trained_model.pth",
+  "save_best_only": true,
+  "use_gpu": true,
+  "num_workers": 1,
+  "debug_mode": false,
+  "profile_performance": false,
+  "deterministic": true,
+  "torch_deterministic": true,
+  "action_range": 1.0,
+  "total_train_years": 6000
+}

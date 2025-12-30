@@ -44,7 +44,6 @@ from trainer import (
     evaluate_agent,
     evaluate_agent_multi_episode,
     compare_with_benchmark,
-    plot_training_curves,
     plot_comparison,
     plot_multi_episode_results,
     TrainingMetrics
@@ -156,15 +155,19 @@ def run_full_training_pipeline(
     agent.save(model_save_path)
     print(f"\nModel saved to: {model_save_path}")
     
+    # Save normalization statistics (CRITICAL for evaluation)
+    norm_stats_path = os.path.join(results_dir, "normalization_stats.json")
+    if norm_stats is not None:
+        norm_stats_save = {k: float(v) if isinstance(v, (np.floating, float)) else v 
+                          for k, v in norm_stats.items()}
+        with open(norm_stats_path, 'w') as f:
+            json.dump(norm_stats_save, f, indent=2)
+        print(f"Normalization stats saved to: {norm_stats_path}")
+    
     # Save training metrics
     metrics_path = os.path.join(results_dir, "training_metrics.json")
     with open(metrics_path, 'w') as f:
         json.dump(metrics.to_dict(), f, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else str(x))
-    
-    # Plot training curves
-    if CONFIG.get("save_plots", True):
-        curves_path = os.path.join(results_dir, "training_curves.png")
-        plot_training_curves(metrics, save_path=curves_path)
     
     # =========================================================================
     # TEST EVALUATION
@@ -255,9 +258,9 @@ def run_full_training_pipeline(
     # Plot results
     if CONFIG.get("save_plots", True):
         if use_windowed_test:
-            # Multi-episode results plot
+            # Multi-episode results plot (RL vs Benchmark comparison)
             multi_ep_path = os.path.join(results_dir, "multi_episode_results.png")
-            plot_multi_episode_results(rl_stats, save_path=multi_ep_path)
+            plot_multi_episode_results(rl_stats, benchmark_results, save_path=multi_ep_path)
         else:
             # Single episode comparison plot
             comparison_path = os.path.join(results_dir, "comparison_test.png")

@@ -1140,70 +1140,89 @@ def evaluate_agent_multi_episode(agent: TD3Agent, test_envs: List, verbose: bool
     return aggregated_stats
 
 
-def plot_multi_episode_results(stats: Dict, save_path: str = None):
+def plot_multi_episode_results(rl_stats: Dict, benchmark_stats: Dict, save_path: str = None):
     """
-    Plot results from multi-episode evaluation.
+    Plot comparison between RL agent and benchmark across multiple episodes.
+    Similar to evaluate_bearish.py plot.
     
     Args:
-        stats: Dictionary from evaluate_agent_multi_episode
+        rl_stats: Dictionary from evaluate_agent_multi_episode (RL agent)
+        benchmark_stats: Dictionary from run_benchmark_multi_episode (benchmark)
         save_path: Path to save plot
     """
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     
-    # 1. Episode P&L distribution
+    # 1. P&L Distribution - RL vs Benchmark
     ax1 = axes[0, 0]
-    ax1.hist(stats['all_cumulative_pnls'], bins=30, edgecolor='black', alpha=0.7, color='#2E86DE')
-    ax1.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Break-even')
-    ax1.axvline(x=stats['mean_cumulative_pnl'], color='green', linestyle='-', linewidth=2, 
-                label=f"Mean: {stats['mean_cumulative_pnl']:.2f}")
-    ax1.set_xlabel('Cumulative P&L per Episode', fontsize=11)
-    ax1.set_ylabel('Frequency', fontsize=11)
-    ax1.set_title('Distribution of Episode P&L (30-day windows)', fontsize=12, fontweight='bold')
+    ax1.hist(rl_stats['all_cumulative_pnls'], bins=30, alpha=0.7, 
+             label=f"RL Agent (μ={rl_stats['mean_cumulative_pnl']:.4f})", color='blue')
+    ax1.hist(benchmark_stats['all_pnls'], bins=30, alpha=0.7, 
+             label=f"Delta Hedge (μ={benchmark_stats['mean_episode_pnl']:.4f})", color='green')
+    ax1.axvline(0, color='red', linestyle='--', label='Break-even')
+    ax1.set_xlabel('Cumulative P&L per Episode')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title('Distribution of Episode P&L')
     ax1.legend()
-    ax1.grid(True, alpha=0.3)
     
-    # 2. Episode Sharpe distribution
+    # 2. Action Distribution - RL vs Benchmark Delta
     ax2 = axes[0, 1]
-    ax2.hist(stats['all_sharpes'], bins=30, edgecolor='black', alpha=0.7, color='#28A745')
-    ax2.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Zero Sharpe')
-    ax2.axvline(x=stats['mean_sharpe'], color='blue', linestyle='-', linewidth=2,
-                label=f"Mean: {stats['mean_sharpe']:.2f}")
-    ax2.set_xlabel('Sharpe Ratio per Episode', fontsize=11)
-    ax2.set_ylabel('Frequency', fontsize=11)
-    ax2.set_title('Distribution of Episode Sharpe Ratios', fontsize=12, fontweight='bold')
+    ax2.hist(rl_stats['all_actions'], bins=50, alpha=0.7, color='blue', edgecolor='black')
+    ax2.axvline(rl_stats['mean_action'], color='blue', linestyle='-', linewidth=2, 
+                label=f"RL Mean: {rl_stats['mean_action']:.3f}")
+    ax2.axvline(benchmark_stats['mean_delta'], color='green', linestyle='--', linewidth=2, 
+                label=f"Benchmark Delta: {benchmark_stats['mean_delta']:.3f}")
+    ax2.set_xlabel('Hedge Ratio (Action)')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title('Distribution of RL Agent Actions')
     ax2.legend()
-    ax2.grid(True, alpha=0.3)
     
-    # 3. Action distribution
+    # 3. Cumulative P&L Progression - RL vs Benchmark
     ax3 = axes[1, 0]
-    ax3.hist(stats['all_actions'], bins=50, edgecolor='black', alpha=0.7, color='#FF6B6B')
-    ax3.axvline(x=stats['mean_action'], color='blue', linestyle='-', linewidth=2,
-                label=f"Mean: {stats['mean_action']:.3f}")
-    ax3.set_xlabel('Hedge Ratio (Action)', fontsize=11)
-    ax3.set_ylabel('Frequency', fontsize=11)
-    ax3.set_title('Distribution of Hedge Ratios Across All Episodes', fontsize=12, fontweight='bold')
+    rl_cumsum = np.cumsum(rl_stats['all_cumulative_pnls'])
+    bench_cumsum = np.cumsum(benchmark_stats['all_pnls'])
+    ax3.plot(rl_cumsum, label='RL Agent', color='blue', linewidth=2)
+    ax3.plot(bench_cumsum, label='Delta Hedge', color='green', linewidth=2)
+    ax3.axhline(0, color='red', linestyle='--', alpha=0.5)
+    ax3.fill_between(range(len(rl_cumsum)), rl_cumsum, alpha=0.3, color='blue')
+    ax3.set_xlabel('Episode Number')
+    ax3.set_ylabel('Cumulative P&L')
+    ax3.set_title('Cumulative P&L Progression')
     ax3.legend()
-    ax3.grid(True, alpha=0.3)
     
-    # 4. Cumulative P&L over episodes
+    # 4. Summary Statistics
     ax4 = axes[1, 1]
-    cumsum_pnl = np.cumsum(stats['all_cumulative_pnls'])
-    ax4.plot(cumsum_pnl, linewidth=2, color='#2E86DE')
-    ax4.axhline(y=0, color='red', linestyle='--', linewidth=1, alpha=0.5)
-    ax4.fill_between(range(len(cumsum_pnl)), 0, cumsum_pnl, 
-                     where=(np.array(cumsum_pnl) > 0), alpha=0.3, color='green')
-    ax4.fill_between(range(len(cumsum_pnl)), 0, cumsum_pnl, 
-                     where=(np.array(cumsum_pnl) <= 0), alpha=0.3, color='red')
-    ax4.set_xlabel('Episode Number', fontsize=11)
-    ax4.set_ylabel('Cumulative P&L (Sum of Episodes)', fontsize=11)
-    ax4.set_title('Cumulative P&L Progression Across Episodes', fontsize=12, fontweight='bold')
-    ax4.grid(True, alpha=0.3)
+    ax4.axis('off')
+    
+    summary_text = f"""
+    EVALUATION RESULTS
+    {'='*50}
+    
+    RL Agent:
+      Mean Episode P&L: {rl_stats['mean_cumulative_pnl']:.4f} ± {rl_stats['std_cumulative_pnl']:.4f}
+      Total P&L: {rl_stats['total_cumulative_pnl']:.4f}
+      Mean Sharpe: {rl_stats['mean_sharpe']:.4f}
+      Mean Hedge Ratio: {rl_stats['mean_action']:.4f}
+      Action Range: [{rl_stats.get('min_action', min(rl_stats['all_actions'])):.4f}, {rl_stats.get('max_action', max(rl_stats['all_actions'])):.4f}]
+    
+    Delta Hedging Benchmark:
+      Mean Episode P&L: {benchmark_stats['mean_episode_pnl']:.4f} ± {benchmark_stats['std_episode_pnl']:.4f}
+      Total P&L: {benchmark_stats['total_cumulative_pnl']:.4f}
+      Mean Sharpe: {benchmark_stats['mean_sharpe']:.4f}
+      Mean Delta: {benchmark_stats['mean_delta']:.4f}
+    
+    {'='*50}
+    P&L Improvement: {rl_stats['total_cumulative_pnl'] - benchmark_stats['total_cumulative_pnl']:+.4f}
+    """
+    
+    ax4.text(0.1, 0.9, summary_text, transform=ax4.transAxes, fontsize=11,
+             verticalalignment='top', fontfamily='monospace',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=CONFIG.get("plot_dpi", 300), bbox_inches='tight')
-        print(f"Multi-episode results plot saved to {save_path}")
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Multi-episode comparison plot saved to {save_path}")
     
     plt.show()
     return fig

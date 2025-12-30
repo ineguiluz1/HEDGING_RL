@@ -87,6 +87,19 @@ CONFIG = {
     "test_start_year": 2004,                       # Start year for test data (real data)
     "test_end_year": 2025,                         # End year for test data (real data)
     
+    # Mixed Market Conditions Training
+    "mc_use_mixed_drift": True,                    # Use mixed bullish/bearish/neutral trajectories
+    "mc_drift_distribution": {                     # Distribution of drift scenarios
+        "bullish": 0.33,                           # 33% bullish trajectories (μ > 0)
+        "neutral": 0.34,                           # 34% neutral trajectories (μ ≈ 0)
+        "bearish": 0.33                            # 33% bearish trajectories (μ < 0)
+    },
+    "mc_drift_ranges": {                           # Drift ranges for each scenario (annual)
+        "bullish": (0.05, 0.20),                   # +5% to +20% annual drift
+        "neutral": (-0.05, 0.05),                  # -5% to +5% annual drift
+        "bearish": (-0.20, -0.05)                  # -20% to -5% annual drift
+    },
+    
     # Evaluation Episode Configuration
     "test_episode_length": 30,                      # Episode length for test (30 days = option expiry)
     "use_windowed_test": True,                     # Whether to use 30-day windows in test data
