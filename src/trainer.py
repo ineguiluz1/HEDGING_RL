@@ -1042,6 +1042,173 @@ def plot_comparison(rl_stats: Dict, benchmark_df: pd.DataFrame, test_env, save_p
     return fig
 
 
+def evaluate_agent_multi_episode(agent: TD3Agent, test_envs: List, verbose: bool = True) -> Dict:
+    """
+    Evaluate agent across multiple test episodes (30-day windows).
+    
+    This evaluates the agent in the same paradigm as training:
+    multiple short episodes simulating option hedging to expiry.
+    
+    Args:
+        agent: TD3Agent instance
+        test_envs: List of HedgingEnv instances (one per test episode)
+        verbose: Whether to print results
+    
+    Returns:
+        dict: Aggregated evaluation statistics across all episodes
+    """
+    all_rewards = []
+    all_pnls = []
+    all_cumulative_pnls = []
+    all_sharpes = []
+    all_actions = []
+    episode_stats_list = []
+    
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"MULTI-EPISODE EVALUATION ({len(test_envs)} episodes)")
+        print(f"{'='*70}")
+    
+    for i, env in enumerate(test_envs):
+        # Evaluate single episode
+        stats = evaluate_agent(agent, env, verbose=False)
+        
+        all_rewards.append(stats['total_reward'])
+        # Use sum of step pnls (normalized) for consistency
+        episode_pnl = np.sum(stats['pnls'])
+        all_pnls.append(episode_pnl)
+        all_cumulative_pnls.append(episode_pnl)  # Same as all_pnls for consistency
+        all_sharpes.append(stats['sharpe_ratio'])
+        all_actions.extend(stats['actions'].tolist())
+        episode_stats_list.append(stats)
+        
+        if verbose and (i + 1) % 50 == 0:
+            print(f"  Evaluated {i + 1}/{len(test_envs)} episodes...")
+    
+    # Aggregate statistics (all P&L values are normalized/comparable)
+    aggregated_stats = {
+        # Per-episode means
+        'mean_episode_reward': np.mean(all_rewards),
+        'std_episode_reward': np.std(all_rewards),
+        'mean_episode_pnl': np.mean(all_pnls),
+        'std_episode_pnl': np.std(all_pnls),
+        'mean_cumulative_pnl': np.mean(all_cumulative_pnls),
+        'std_cumulative_pnl': np.std(all_cumulative_pnls),
+        'mean_sharpe': np.mean(all_sharpes),
+        'std_sharpe': np.std(all_sharpes),
+        
+        # Aggregated totals (sum of normalized episode P&Ls)
+        'total_reward': sum(all_rewards),
+        'total_pnl': sum(all_pnls),
+        'total_cumulative_pnl': sum(all_pnls),  # Use normalized P&L sum
+        
+        # Action statistics across all episodes
+        'mean_action': np.mean(all_actions),
+        'std_action': np.std(all_actions),
+        'min_action': np.min(all_actions),
+        'max_action': np.max(all_actions),
+        
+        # Number of episodes
+        'n_episodes': len(test_envs),
+        
+        # All individual episode stats
+        'episode_stats': episode_stats_list,
+        'all_rewards': all_rewards,
+        'all_pnls': all_pnls,
+        'all_cumulative_pnls': all_cumulative_pnls,
+        'all_sharpes': all_sharpes,
+        'all_actions': np.array(all_actions)
+    }
+    
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"MULTI-EPISODE EVALUATION RESULTS")
+        print(f"{'='*70}")
+        print(f"Number of Episodes: {aggregated_stats['n_episodes']}")
+        print(f"\nPer-Episode Statistics:")
+        print(f"  Mean Reward: {aggregated_stats['mean_episode_reward']:.4f} ± {aggregated_stats['std_episode_reward']:.4f}")
+        print(f"  Mean P&L: {aggregated_stats['mean_episode_pnl']:.4f} ± {aggregated_stats['std_episode_pnl']:.4f}")
+        print(f"  Mean Sharpe: {aggregated_stats['mean_sharpe']:.4f} ± {aggregated_stats['std_sharpe']:.4f}")
+        print(f"\nAction Statistics (across all episodes):")
+        print(f"  Mean Hedge Ratio: {aggregated_stats['mean_action']:.4f} ± {aggregated_stats['std_action']:.4f}")
+        print(f"  Action Range: [{aggregated_stats['min_action']:.4f}, {aggregated_stats['max_action']:.4f}]")
+        print(f"\nAggregated Totals:")
+        print(f"  Total P&L: {aggregated_stats['total_pnl']:.4f}")
+        print(f"  Total Reward: {aggregated_stats['total_reward']:.4f}")
+        print(f"{'='*70}")
+    
+    return aggregated_stats
+
+
+def plot_multi_episode_results(stats: Dict, save_path: str = None):
+    """
+    Plot results from multi-episode evaluation.
+    
+    Args:
+        stats: Dictionary from evaluate_agent_multi_episode
+        save_path: Path to save plot
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    # 1. Episode P&L distribution
+    ax1 = axes[0, 0]
+    ax1.hist(stats['all_cumulative_pnls'], bins=30, edgecolor='black', alpha=0.7, color='#2E86DE')
+    ax1.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Break-even')
+    ax1.axvline(x=stats['mean_cumulative_pnl'], color='green', linestyle='-', linewidth=2, 
+                label=f"Mean: {stats['mean_cumulative_pnl']:.2f}")
+    ax1.set_xlabel('Cumulative P&L per Episode', fontsize=11)
+    ax1.set_ylabel('Frequency', fontsize=11)
+    ax1.set_title('Distribution of Episode P&L (30-day windows)', fontsize=12, fontweight='bold')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Episode Sharpe distribution
+    ax2 = axes[0, 1]
+    ax2.hist(stats['all_sharpes'], bins=30, edgecolor='black', alpha=0.7, color='#28A745')
+    ax2.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Zero Sharpe')
+    ax2.axvline(x=stats['mean_sharpe'], color='blue', linestyle='-', linewidth=2,
+                label=f"Mean: {stats['mean_sharpe']:.2f}")
+    ax2.set_xlabel('Sharpe Ratio per Episode', fontsize=11)
+    ax2.set_ylabel('Frequency', fontsize=11)
+    ax2.set_title('Distribution of Episode Sharpe Ratios', fontsize=12, fontweight='bold')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # 3. Action distribution
+    ax3 = axes[1, 0]
+    ax3.hist(stats['all_actions'], bins=50, edgecolor='black', alpha=0.7, color='#FF6B6B')
+    ax3.axvline(x=stats['mean_action'], color='blue', linestyle='-', linewidth=2,
+                label=f"Mean: {stats['mean_action']:.3f}")
+    ax3.set_xlabel('Hedge Ratio (Action)', fontsize=11)
+    ax3.set_ylabel('Frequency', fontsize=11)
+    ax3.set_title('Distribution of Hedge Ratios Across All Episodes', fontsize=12, fontweight='bold')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # 4. Cumulative P&L over episodes
+    ax4 = axes[1, 1]
+    cumsum_pnl = np.cumsum(stats['all_cumulative_pnls'])
+    ax4.plot(cumsum_pnl, linewidth=2, color='#2E86DE')
+    ax4.axhline(y=0, color='red', linestyle='--', linewidth=1, alpha=0.5)
+    ax4.fill_between(range(len(cumsum_pnl)), 0, cumsum_pnl, 
+                     where=(np.array(cumsum_pnl) > 0), alpha=0.3, color='green')
+    ax4.fill_between(range(len(cumsum_pnl)), 0, cumsum_pnl, 
+                     where=(np.array(cumsum_pnl) <= 0), alpha=0.3, color='red')
+    ax4.set_xlabel('Episode Number', fontsize=11)
+    ax4.set_ylabel('Cumulative P&L (Sum of Episodes)', fontsize=11)
+    ax4.set_title('Cumulative P&L Progression Across Episodes', fontsize=12, fontweight='bold')
+    ax4.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=CONFIG.get("plot_dpi", 300), bbox_inches='tight')
+        print(f"Multi-episode results plot saved to {save_path}")
+    
+    plt.show()
+    return fig
+
+
 if __name__ == "__main__":
     # Quick test of training
     print("Testing SB3 Training Script...")

@@ -1,27 +1,18 @@
 #!/usr/bin/env python3
 """
-Main Training Script for TD3 Hedging Agent (v2)
-================================================
+Main Training Script for TD3 Hedging Agent
+==========================================
 
 This script trains a TD3 agent for options hedging using:
-- Monte Carlo simulated trajectories for training/validation
+- Monte Carlo simulated trajectories for training
 - Real S&P 500 daily data for testing
 
 Usage:
-    python run_training.py                    # Use default config
-    python run_training.py --test-only        # Only run test evaluation
-    python run_training.py --legacy           # Use legacy mode (historical CSV)
+    python run_training.py                    # Run training and evaluation
     
 Configuration:
-    Monte Carlo Mode (default):
-        Training: mc_train_trajectories (e.g., 50) synthetic 1-year paths
-        Validation: mc_val_trajectories (e.g., 10) synthetic 1-year paths
-        Testing: Real S&P 500 data (2004-2025)
-    
-    Legacy Mode (--legacy):
-        Training years: 2005-2010 (from config.py)
-        Validation year: 2011
-        Test year: 2012
+    Training: mc_train_trajectories (e.g., 50) synthetic 1-year paths
+    Testing: Real S&P 500 data (2004-2025)
 
 Author: Generated for HEDGING_RL project
 """
@@ -51,9 +42,11 @@ from trainer import (
     train_td3,
     train_multi_year,
     evaluate_agent,
+    evaluate_agent_multi_episode,
     compare_with_benchmark,
     plot_training_curves,
     plot_comparison,
+    plot_multi_episode_results,
     TrainingMetrics
 )
 from benchmark import run_benchmark_simple, delta_hedging_simple
@@ -86,93 +79,64 @@ def save_config(results_dir):
 
 
 def run_full_training_pipeline(
-    data_path=None,
-    train_years=None,
-    validation_year=None,
-    test_year=None,
     results_dir=None,
     verbose=True
 ):
     """
-    Run the full training pipeline with Monte Carlo or Legacy mode.
+    Run the full training pipeline with Monte Carlo trajectories.
     
-    Monte Carlo Mode (default):
     1. Generate MC trajectories for training
     2. Train TD3 agent on MC trajectories (single pass, no validation)
     3. Test on real S&P 500 data
-    
-    Legacy Mode:
-    1. Load historical CSV data
-    2. Split by years
-    3. Train and test on historical data
     
     Note: Each trajectory is used only ONCE to avoid overfitting.
     To train more, increase mc_train_trajectories in config.
     
     Args:
-        data_path: Path to data file (legacy mode only)
-        train_years: List of training years (legacy mode only)
-        validation_year: Validation year (legacy mode only)
-        test_year: Test year (legacy mode only)
         results_dir: Directory to save results
         verbose: Whether to print progress
     
     Returns:
         dict: Results dictionary
     """
-    # Set defaults from config
-    use_mc = CONFIG.get("use_montecarlo_training", True)
-    
     if results_dir is None:
         results_dir = setup_results_dir()
     
-    mode_str = "MONTE CARLO" if use_mc else "LEGACY"
-    
     print(f"\n{'='*70}")
-    print(f"TD3 HEDGING AGENT - FULL TRAINING PIPELINE ({mode_str} MODE)")
+    print(f"TD3 HEDGING AGENT - FULL TRAINING PIPELINE")
     print(f"{'='*70}")
     print(f"Results directory: {results_dir}")
     print(f"Device: {device}")
-    
-    if use_mc:
-        print(f"Training trajectories: {CONFIG.get('mc_train_trajectories', 50)}")
-        print(f"Test data: Real S&P 500 ({CONFIG.get('test_start_year', 2004)}-{CONFIG.get('test_end_year', 2025)})")
-        print(f"Note: Single-pass training (no epochs, no validation to avoid overfitting)")
-    else:
-        if train_years is None:
-            train_years = CONFIG.get("train_years", [2005, 2006, 2007, 2008, 2009, 2010])
-        if validation_year is None:
-            validation_year = CONFIG.get("validation_year", 2011)
-        if test_year is None:
-            test_year = CONFIG.get("test_year", 2012)
-        print(f"Training years: {train_years}")
-        print(f"Validation year: {validation_year}")
-        print(f"Test year: {test_year}")
-    
+    print(f"Training episodes: {CONFIG.get('mc_train_trajectories', 50)} x {CONFIG.get('mc_episode_length', 30)} days")
+    print(f"Test data: Real S&P 500 ({CONFIG.get('test_start_year', 2004)}-{CONFIG.get('test_end_year', 2025)})")
+    print(f"Test mode: {'Windowed episodes' if CONFIG.get('use_windowed_test', True) else 'Single long episode'}")
+    print(f"Note: Single-pass training (no epochs, no validation to avoid overfitting)")
     print(f"{'='*70}\n")
     
     # Save configuration
     save_config(results_dir)
+    
+    # Store results_dir in CONFIG so data_loader can access it for plotting
+    CONFIG['current_results_dir'] = results_dir
     
     # =========================================================================
     # CREATE ENVIRONMENTS
     # =========================================================================
     print("Step 1: Creating environments...")
     
-    envs = create_environments_for_training(
-        data_path=data_path,
-        train_years=train_years,
-        validation_year=validation_year,
-        test_year=test_year,
-        verbose=verbose
-    )
+    envs = create_environments_for_training(verbose=verbose)
     
     train_envs = envs['train_envs']
-    test_env = envs['test_env']
+    test_env = envs.get('test_env')
+    test_envs = envs.get('test_envs', [])  # List of 30-day test windows
     norm_stats = envs['normalization_stats']
+    use_windowed_test = CONFIG.get('use_windowed_test', True) and len(test_envs) > 1
     
-    print(f"\n  Training environments: {len(train_envs)}")
-    print(f"  Test environment: {'Ready' if test_env else 'Not available'}")
+    print(f"\n  Training environments: {len(train_envs)} ({CONFIG.get('mc_episode_length', 30)} days each)")
+    if use_windowed_test:
+        print(f"  Test environments: {len(test_envs)} ({CONFIG.get('test_episode_length', 30)}-day windows)")
+    else:
+        print(f"  Test environment: {'Ready' if test_env else 'Not available'}")
     
     # =========================================================================
     # TRAINING
@@ -205,50 +169,79 @@ def run_full_training_pipeline(
     # =========================================================================
     # TEST EVALUATION
     # =========================================================================
-    if test_env is None:
+    if test_env is None and len(test_envs) == 0:
         print("\n⚠ No test environment available - skipping evaluation")
         return {'agent': agent, 'metrics': metrics, 'results_dir': results_dir}
     
     print(f"\nStep 3: Evaluating on Test Data...")
     
-    # Evaluate RL agent
-    print("\nEvaluating RL Agent on test data...")
-    rl_stats = evaluate_agent(agent, test_env, verbose=True)
-    
-    # =========================================================================
-    # BENCHMARK COMPARISON
-    # =========================================================================
-    print(f"\nStep 4: Running Delta Hedging Benchmark...")
-    
-    # Run benchmark on test environment data
-    benchmark_results = run_benchmark_on_env(test_env, verbose=True)
-    
-    benchmark_pnl = benchmark_results['cumulative_pnl']
-    benchmark_reward = benchmark_results['cumulative_reward']
-    benchmark_sharpe = benchmark_results['sharpe_ratio']
-    benchmark_df = benchmark_results['df']
-    
-    # Calculate RL cumulative P&L from normalized step pnls (same scale as benchmark)
-    rl_cumulative_pnl = np.sum(rl_stats['pnls'])
+    # Check if we're using windowed evaluation (same paradigm as training)
+    if use_windowed_test and len(test_envs) > 1:
+        # Multi-episode evaluation (30-day windows)
+        print(f"\nEvaluating RL Agent on {len(test_envs)} test episodes ({CONFIG.get('test_episode_length', 30)} days each)...")
+        rl_stats = evaluate_agent_multi_episode(agent, test_envs, verbose=True)
+        
+        # For windowed test, we use per-episode statistics
+        rl_cumulative_pnl = rl_stats['total_cumulative_pnl']
+        rl_sharpe = rl_stats['mean_sharpe']
+        
+        # Run benchmark on all test windows
+        print(f"\nStep 4: Running Delta Hedging Benchmark on {len(test_envs)} test episodes...")
+        benchmark_results = run_benchmark_multi_episode(test_envs, verbose=True)
+        
+        benchmark_pnl = benchmark_results['total_cumulative_pnl']
+        benchmark_reward = benchmark_results['total_cumulative_reward']
+        benchmark_sharpe = benchmark_results['mean_sharpe']
+        benchmark_df = benchmark_results['aggregated_df']
+        
+    else:
+        # Single long episode evaluation (legacy mode)
+        print("\nEvaluating RL Agent on single test episode...")
+        rl_stats = evaluate_agent(agent, test_env, verbose=True)
+        rl_cumulative_pnl = np.sum(rl_stats['pnls'])
+        rl_sharpe = rl_stats['sharpe_ratio']
+        
+        # =========================================================================
+        # BENCHMARK COMPARISON
+        # =========================================================================
+        print(f"\nStep 4: Running Delta Hedging Benchmark...")
+        
+        # Run benchmark on test environment data
+        benchmark_results = run_benchmark_on_env(test_env, verbose=True)
+        
+        benchmark_pnl = benchmark_results['cumulative_pnl']
+        benchmark_reward = benchmark_results['cumulative_reward']
+        benchmark_sharpe = benchmark_results['sharpe_ratio']
+        benchmark_df = benchmark_results['df']
     
     # =========================================================================
     # COMPARISON SUMMARY
     # =========================================================================
     print(f"\n{'='*70}")
-    print(f"FINAL COMPARISON: RL Agent vs Delta Hedging (Normalized P&L)")
+    print(f"FINAL COMPARISON: RL Agent vs Delta Hedging")
+    if use_windowed_test:
+        print(f"  (Multi-Episode Evaluation: {len(test_envs)} x {CONFIG.get('test_episode_length', 30)} days)")
     print(f"{'='*70}")
     print(f"{'Metric':<30} {'RL Agent':<20} {'Delta Hedge':<20}")
     print(f"{'-'*70}")
-    print(f"{'Total Reward':<30} {rl_stats['total_reward']:<20.4f} {benchmark_reward:<20.4f}")
-    print(f"{'Cumulative P&L':<30} {rl_cumulative_pnl:<20.4f} {benchmark_pnl:<20.4f}")
-    print(f"{'Sharpe Ratio':<30} {rl_stats['sharpe_ratio']:<20.4f} {benchmark_sharpe:<20.4f}")
-    print(f"{'Mean Action (Hedge Ratio)':<30} {rl_stats['mean_action']:<20.4f} {benchmark_df['Delta'].mean():<20.4f}")
-    print(f"{'Std Action':<30} {rl_stats['std_action']:<20.4f} {benchmark_df['Delta'].std():<20.4f}")
+    
+    if use_windowed_test:
+        print(f"{'Mean Episode P&L':<30} {rl_stats['mean_episode_pnl']:<20.4f} {benchmark_results['mean_episode_pnl']:<20.4f}")
+        print(f"{'Total P&L (all episodes)':<30} {rl_cumulative_pnl:<20.4f} {benchmark_pnl:<20.4f}")
+        print(f"{'Mean Sharpe Ratio':<30} {rl_sharpe:<20.4f} {benchmark_sharpe:<20.4f}")
+        print(f"{'Mean Hedge Ratio':<30} {rl_stats['mean_action']:<20.4f} {benchmark_results['mean_delta']:<20.4f}")
+    else:
+        print(f"{'Total Reward':<30} {rl_stats['total_reward']:<20.4f} {benchmark_reward:<20.4f}")
+        print(f"{'Cumulative P&L':<30} {rl_cumulative_pnl:<20.4f} {benchmark_pnl:<20.4f}")
+        print(f"{'Sharpe Ratio':<30} {rl_sharpe:<20.4f} {benchmark_sharpe:<20.4f}")
+        print(f"{'Mean Action (Hedge Ratio)':<30} {rl_stats['mean_action']:<20.4f} {benchmark_df['Delta'].mean():<20.4f}")
+        print(f"{'Std Action':<30} {rl_stats['std_action']:<20.4f} {benchmark_df['Delta'].std():<20.4f}")
+    
     print(f"{'='*70}")
     
     # Calculate improvements
     pnl_improvement = rl_cumulative_pnl - benchmark_pnl
-    sharpe_improvement = rl_stats['sharpe_ratio'] - benchmark_sharpe
+    sharpe_improvement = rl_sharpe - benchmark_sharpe
     
     print(f"\nIMPROVEMENTS:")
     print(f"  P&L Improvement: {pnl_improvement:+.4f} ({pnl_improvement/abs(benchmark_pnl + 1e-8)*100:+.2f}%)")
@@ -259,11 +252,17 @@ def run_full_training_pipeline(
     else:
         print(f"\n❌ Delta Hedging outperforms RL Agent")
     
-    # Plot comparison
+    # Plot results
     if CONFIG.get("save_plots", True):
-        comparison_path = os.path.join(results_dir, "comparison_test.png")
-        plot_comparison(rl_stats, benchmark_df, test_env, save_path=comparison_path, 
-                       test_year="Test", output_dir=results_dir)
+        if use_windowed_test:
+            # Multi-episode results plot
+            multi_ep_path = os.path.join(results_dir, "multi_episode_results.png")
+            plot_multi_episode_results(rl_stats, save_path=multi_ep_path)
+        else:
+            # Single episode comparison plot
+            comparison_path = os.path.join(results_dir, "comparison_test.png")
+            plot_comparison(rl_stats, benchmark_df, test_env, save_path=comparison_path, 
+                           test_year="Test", output_dir=results_dir)
     
     # =========================================================================
     # SAVE RESULTS
@@ -271,21 +270,19 @@ def run_full_training_pipeline(
     results = {
         'mode': envs['mode'],
         'num_train_trajectories': len(train_envs),
+        'episode_length_train': CONFIG.get('mc_episode_length', 30),
+        'episode_length_test': CONFIG.get('test_episode_length', 30),
+        'use_windowed_test': use_windowed_test,
+        'num_test_episodes': len(test_envs) if use_windowed_test else 1,
         'rl_agent': {
-            'total_reward': float(rl_stats['total_reward']),
-            'cumulative_pnl_normalized': float(rl_cumulative_pnl),  # Normalized (same scale as benchmark)
-            'cumulative_pnl_raw': float(rl_stats['cumulative_pnl']),  # Raw from environment
-            'sharpe_ratio': float(rl_stats['sharpe_ratio']),
+            'total_pnl': float(rl_cumulative_pnl),
+            'sharpe_ratio': float(rl_sharpe),
             'mean_action': float(rl_stats['mean_action']),
             'std_action': float(rl_stats['std_action']),
-            'steps': int(rl_stats['steps'])
         },
         'benchmark': {
-            'cumulative_pnl': float(benchmark_pnl),
-            'cumulative_reward': float(benchmark_reward),
+            'total_pnl': float(benchmark_pnl),
             'sharpe_ratio': float(benchmark_sharpe),
-            'mean_delta': float(benchmark_df['Delta'].mean()),
-            'std_delta': float(benchmark_df['Delta'].std())
         },
         'improvements': {
             'pnl': float(pnl_improvement),
@@ -294,6 +291,13 @@ def run_full_training_pipeline(
         'model_path': model_save_path,
         'results_dir': results_dir
     }
+    
+    # Add additional per-episode stats if windowed
+    if use_windowed_test:
+        results['rl_agent']['mean_episode_pnl'] = float(rl_stats['mean_episode_pnl'])
+        results['rl_agent']['std_episode_pnl'] = float(rl_stats['std_episode_pnl'])
+        results['benchmark']['mean_episode_pnl'] = float(benchmark_results['mean_episode_pnl'])
+        results['benchmark']['mean_delta'] = float(benchmark_results['mean_delta'])
     
     results_path = os.path.join(results_dir, "results.json")
     with open(results_path, 'w') as f:
@@ -460,6 +464,68 @@ def train_single_episode(agent, env, global_step=0):
     return episode_reward, steps, losses
 
 
+def run_benchmark_multi_episode(test_envs, verbose=True):
+    """
+    Run delta hedging benchmark on multiple test episodes.
+    
+    Args:
+        test_envs: List of HedgingEnv instances
+        verbose: Print progress
+    
+    Returns:
+        dict: Aggregated benchmark results
+    """
+    all_pnls = []
+    all_rewards = []
+    all_sharpes = []
+    all_deltas = []
+    all_episode_results = []
+    
+    if verbose:
+        print(f"\nRunning benchmark on {len(test_envs)} episodes...")
+    
+    for i, env in enumerate(test_envs):
+        results = run_benchmark_on_env(env, verbose=False)
+        
+        all_pnls.append(results['cumulative_pnl'])
+        all_rewards.append(results['cumulative_reward'])
+        all_sharpes.append(results['sharpe_ratio'])
+        all_deltas.extend(results['df']['Delta'].tolist())
+        all_episode_results.append(results)
+        
+        if verbose and (i + 1) % 50 == 0:
+            print(f"  Benchmark evaluated {i + 1}/{len(test_envs)} episodes...")
+    
+    # Aggregate
+    aggregated = {
+        'mean_episode_pnl': np.mean(all_pnls),
+        'std_episode_pnl': np.std(all_pnls),
+        'total_cumulative_pnl': sum(all_pnls),
+        'total_cumulative_reward': sum(all_rewards),
+        'mean_sharpe': np.mean(all_sharpes),
+        'std_sharpe': np.std(all_sharpes),
+        'mean_delta': np.mean(all_deltas),
+        'std_delta': np.std(all_deltas),
+        'n_episodes': len(test_envs),
+        'all_pnls': all_pnls,
+        'all_rewards': all_rewards,
+        'all_sharpes': all_sharpes,
+        'episode_results': all_episode_results,
+        # Create aggregated DataFrame for plotting
+        'aggregated_df': pd.concat([r['df'] for r in all_episode_results], ignore_index=True)
+    }
+    
+    if verbose:
+        print(f"\nBenchmark Multi-Episode Results:")
+        print(f"  Episodes: {len(test_envs)}")
+        print(f"  Mean Episode P&L: {aggregated['mean_episode_pnl']:.4f} ± {aggregated['std_episode_pnl']:.4f}")
+        print(f"  Total P&L: {aggregated['total_cumulative_pnl']:.4f}")
+        print(f"  Mean Sharpe: {aggregated['mean_sharpe']:.4f} ± {aggregated['std_sharpe']:.4f}")
+        print(f"  Mean Delta: {aggregated['mean_delta']:.4f}")
+    
+    return aggregated
+
+
 def run_benchmark_on_env(env, verbose=True):
     """
     Run delta hedging benchmark on an environment.
@@ -565,131 +631,16 @@ def run_benchmark_on_env(env, verbose=True):
     }
 
 
-def run_test_only(
-    model_path,
-    data_path=None,
-    test_year=None,
-    verbose=True
-):
-    """
-    Run test evaluation only using a pre-trained model
-    
-    Args:
-        model_path: Path to saved model
-        data_path: Path to data file
-        test_year: Year to test on
-        verbose: Whether to print results
-    
-    Returns:
-        dict: Test results
-    """
-    if data_path is None:
-        data_path = CONFIG.get("data_path", "./data/historical_hedging_data.csv")
-    if test_year is None:
-        test_year = CONFIG.get("test_year", 2012)
-    
-    print(f"\n{'='*70}")
-    print(f"TD3 HEDGING AGENT - TEST EVALUATION")
-    print(f"{'='*70}")
-    print(f"Model path: {model_path}")
-    print(f"Test year: {test_year}")
-    print(f"{'='*70}\n")
-    
-    # Load data
-    df = load_hedging_data(data_path)
-    datetime_col = CONFIG.get("datetime_column", "timestamp")
-    if not pd.api.types.is_datetime64_any_dtype(df[datetime_col]):
-        df[datetime_col] = pd.to_datetime(df[datetime_col])
-    
-    test_df = df[df[datetime_col].dt.year == test_year].copy().reset_index(drop=True)
-    
-    if len(test_df) == 0:
-        raise ValueError(f"No data found for test year {test_year}")
-    
-    # Create test environment (without normalization stats - will compute from test data)
-    test_env = create_environment(
-        test_df,
-        normalize=CONFIG.get("normalize_data", True),
-        verbose=False
-    )
-    
-    # Load agent
-    state_dim = test_env.observation_space.shape[0]
-    action_dim = test_env.action_space.shape[0]
-    
-    agent = TD3Agent(state_dim, action_dim)
-    agent.load(model_path)
-    
-    # Evaluate
-    rl_stats = evaluate_agent(agent, test_env, verbose=verbose)
-    
-    # Run benchmark
-    benchmark_df = run_benchmark_simple(df, year=test_year, verbose=verbose)
-    
-    benchmark_pnl = benchmark_df["Cumulative PnL"].iloc[-1]
-    benchmark_sharpe = benchmark_df["PnL"].mean() / (benchmark_df["PnL"].std() + 1e-8) * np.sqrt(252)
-    
-    print(f"\n{'='*70}")
-    print(f"COMPARISON")
-    print(f"{'='*70}")
-    print(f"RL Cumulative P&L: {rl_stats['cumulative_pnl']:.4f}")
-    print(f"Benchmark Cumulative P&L: {benchmark_pnl:.4f}")
-    print(f"Improvement: {rl_stats['cumulative_pnl'] - benchmark_pnl:+.4f}")
-    print(f"{'='*70}")
-    
-    return {
-        'rl_stats': rl_stats,
-        'benchmark_pnl': benchmark_pnl,
-        'benchmark_sharpe': benchmark_sharpe
-    }
-
-
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description='Train TD3 agent for options hedging')
     
-    parser.add_argument('--data-path', type=str, default=None,
-                       help='Path to data file (legacy mode only)')
-    parser.add_argument('--train-years', type=int, nargs='+', default=None,
-                       help='Years to use for training (legacy mode only)')
-    parser.add_argument('--val-year', type=int, default=None,
-                       help='Year to use for validation (legacy mode only)')
-    parser.add_argument('--test-year', type=int, default=None,
-                       help='Year to use for testing (legacy mode only)')
-    parser.add_argument('--test-only', action='store_true',
-                       help='Only run test evaluation')
-    parser.add_argument('--model-path', type=str, default=None,
-                       help='Path to model for test-only mode')
-    parser.add_argument('--legacy', action='store_true',
-                       help='Use legacy mode (historical CSV data instead of Monte Carlo)')
     parser.add_argument('--quiet', action='store_true',
                        help='Reduce output verbosity')
     
     args = parser.parse_args()
     
-    # Set mode in config
-    if args.legacy:
-        CONFIG["use_montecarlo_training"] = False
-    
-    if args.test_only:
-        if args.model_path is None:
-            print("Error: --model-path required for --test-only mode")
-            sys.exit(1)
-        
-        run_test_only(
-            model_path=args.model_path,
-            data_path=args.data_path,
-            test_year=args.test_year,
-            verbose=not args.quiet
-        )
-    else:
-        run_full_training_pipeline(
-            data_path=args.data_path,
-            train_years=args.train_years,
-            validation_year=args.val_year,
-            test_year=args.test_year,
-            verbose=not args.quiet
-        )
+    run_full_training_pipeline(verbose=not args.quiet)
 
 
 if __name__ == "__main__":

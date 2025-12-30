@@ -226,7 +226,9 @@ def create_environments_for_training(
         normalize = CONFIG.get("normalize_data", True)
     
     if use_mc:
-        return _create_mc_environments(normalize=normalize, verbose=verbose)
+        # Check if results_dir is available in CONFIG (set by run_training.py)
+        results_dir = CONFIG.get('current_results_dir', None)
+        return _create_mc_environments(normalize=normalize, verbose=verbose, results_dir=results_dir)
     else:
         return _create_legacy_environments(
             data_path=data_path,
@@ -238,21 +240,32 @@ def create_environments_for_training(
         )
 
 
-def _create_mc_environments(normalize=True, verbose=True):
+def _create_mc_environments(normalize=True, verbose=True, results_dir=None):
     """
     Create environments using Monte Carlo data for training
     and real S&P 500 data for testing.
     
+    Args:
+        normalize: Whether to normalize features
+        verbose: Whether to print progress
+        results_dir: Optional directory to save MC trajectory plot
+    
     Returns:
-        dict with train_envs, test_env
+        dict with train_envs, test_envs (list of 30-day windows)
     """
     if verbose:
         print("\n" + "="*60)
         print("CREATING ENVIRONMENTS (Monte Carlo Mode)")
         print("="*60)
+        print(f"  Training: {CONFIG.get('mc_episode_length', 30)}-day Monte Carlo episodes")
+        print(f"  Testing:  {CONFIG.get('test_episode_length', 30)}-day windows from real S&P 500")
     
     # 1. Generate Monte Carlo trajectories for training
-    mc_data = generate_train_val_data(verbose=verbose)
+    plot_path = None
+    if results_dir is not None:
+        plot_path = os.path.join(results_dir, 'mc_trajectories.png')
+    
+    mc_data = generate_train_val_data(verbose=verbose, plot_path=plot_path)
     
     # 2. Create environments from MC trajectories
     # First trajectory for normalization stats
@@ -276,14 +289,23 @@ def _create_mc_environments(normalize=True, verbose=True):
         train_envs.append(env)
     
     if verbose:
-        print(f"\n  ✓ Created {len(train_envs)} training environments")
+        print(f"\n  ✓ Created {len(train_envs)} training environments ({CONFIG.get('mc_episode_length', 30)} steps each)")
     
-    # 3. Load real S&P 500 data for testing
-    test_env = _create_test_env_from_real_data(norm_stats, normalize, verbose)
+    # 3. Load real S&P 500 data for testing (as windowed episodes)
+    test_result = _create_test_env_from_real_data(norm_stats, normalize, verbose)
+    
+    # Handle both windowed (list) and single (env) returns
+    if isinstance(test_result, list):
+        test_envs = test_result
+        test_env = test_result[0] if test_result else None  # Keep single env for backward compatibility
+    else:
+        test_env = test_result
+        test_envs = [test_result] if test_result else []
     
     return {
         'train_envs': train_envs,
-        'test_env': test_env,
+        'test_env': test_env,           # Single env (backward compatibility)
+        'test_envs': test_envs,         # List of windowed test envs
         'normalization_stats': norm_stats,
         'mode': 'montecarlo'
     }
@@ -291,14 +313,20 @@ def _create_mc_environments(normalize=True, verbose=True):
 
 def _create_test_env_from_real_data(norm_stats=None, normalize=True, verbose=True):
     """
-    Create test environment from real S&P 500 daily data.
-    Uses generate_contract.py to convert raw prices to hedging data.
+    Create test environment(s) from real S&P 500 daily data.
+    
+    If use_windowed_test=True in config, creates multiple 30-day windows
+    to evaluate the agent in the same paradigm as training.
+    
+    Otherwise, creates a single environment with all test data.
     """
     from generate_contract import generate_historical_hedging_data
     
     sp500_path = CONFIG.get("sp500_data_path", "./data/sp500_data.csv")
     test_start = CONFIG.get("test_start_year", 2004)
     test_end = CONFIG.get("test_end_year", 2025)
+    use_windowed = CONFIG.get("use_windowed_test", True)
+    test_episode_length = CONFIG.get("test_episode_length", 30)
     
     # Handle relative paths - check both from current dir and from parent
     if not os.path.isabs(sp500_path):
@@ -312,6 +340,10 @@ def _create_test_env_from_real_data(norm_stats=None, normalize=True, verbose=Tru
         print(f"\n  Loading real S&P 500 data for testing...")
         print(f"    Path: {sp500_path}")
         print(f"    Years: {test_start} - {test_end}")
+        if use_windowed:
+            print(f"    Mode: {test_episode_length}-day windowed episodes (same as training)")
+        else:
+            print(f"    Mode: Single long episode (all test data)")
     
     # Check if raw data exists
     if not os.path.exists(sp500_path):
@@ -344,15 +376,104 @@ def _create_test_env_from_real_data(norm_stats=None, normalize=True, verbose=Tru
         print(f"    ✓ Test data: {len(test_df)} daily observations")
         print(f"    Date range: {test_df[datetime_col].min().date()} to {test_df[datetime_col].max().date()}")
     
-    # Create environment
-    test_env = create_environment(
-        test_df,
-        normalization_stats=norm_stats,
-        normalize=normalize,
-        verbose=False
-    )
+    if use_windowed:
+        # Create multiple 30-day windows from the real data
+        return _create_windowed_test_envs(
+            test_df, 
+            window_length=test_episode_length,
+            norm_stats=norm_stats, 
+            normalize=normalize, 
+            verbose=verbose
+        )
+    else:
+        # Legacy: single environment with all test data
+        test_env = create_environment(
+            test_df,
+            normalization_stats=norm_stats,
+            normalize=normalize,
+            verbose=False
+        )
+        return test_env
+
+
+def _create_windowed_test_envs(df, window_length=30, norm_stats=None, normalize=True, verbose=True):
+    """
+    Create multiple test environments from 30-day windows of real data.
     
-    return test_env
+    This simulates the same paradigm as training: each episode is a 30-day
+    option hedging window where an option is sold at t=0 and expires at t=30.
+    
+    Windows are non-overlapping to ensure independent evaluation.
+    
+    Args:
+        df: DataFrame with hedging data
+        window_length: Length of each window in trading days
+        norm_stats: Normalization statistics (from training)
+        normalize: Whether to normalize
+        verbose: Whether to print progress
+    
+    Returns:
+        list: List of HedgingEnv instances, one per window
+    """
+    from generate_contract import generate_historical_hedging_data
+    
+    datetime_col = 'timestamp'
+    test_envs = []
+    
+    # Create non-overlapping windows
+    total_rows = len(df)
+    n_windows = total_rows // window_length
+    
+    if verbose:
+        print(f"    Creating {n_windows} non-overlapping {window_length}-day test windows...")
+    
+    for i in range(n_windows):
+        start_idx = i * window_length
+        end_idx = start_idx + window_length
+        
+        # Get window data
+        window_df = df.iloc[start_idx:end_idx].copy().reset_index(drop=True)
+        
+        # Modify TTM to simulate option expiry within this window
+        # At start: TTM = window_length/252, at end: TTM ≈ 1/252
+        initial_ttm = window_length / 252.0
+        window_df['time_to_maturity'] = np.linspace(initial_ttm, 1/252.0, window_length)
+        
+        # Set strike to ATM at the start of the window (fixed throughout)
+        initial_price = window_df['underlying_price'].iloc[0]
+        window_df['strike'] = initial_price
+        window_df['moneyness'] = window_df['underlying_price'] / window_df['strike']
+        
+        # Recalculate option prices with new TTM and fixed strike
+        from scipy.stats import norm as scipy_norm
+        
+        S = window_df['underlying_price'].values
+        K = window_df['strike'].values
+        T = window_df['time_to_maturity'].values
+        r = CONFIG.get("risk_free_rate", 0.02)
+        sigma = window_df['realized_volatility'].values if 'realized_volatility' in window_df.columns else 0.2
+        
+        # Handle edge cases for Black-Scholes
+        sigma = np.maximum(sigma, 1e-6)
+        T = np.maximum(T, 1e-6)
+        
+        d1 = (np.log(S/K) + (r + 0.5*sigma**2)*T) / (sigma*np.sqrt(T))
+        d2 = d1 - sigma*np.sqrt(T)
+        window_df['option_price'] = S * scipy_norm.cdf(d1) - K * np.exp(-r*T) * scipy_norm.cdf(d2)
+        
+        # Create environment
+        env = create_environment(
+            window_df,
+            normalization_stats=norm_stats,
+            normalize=normalize,
+            verbose=False
+        )
+        test_envs.append(env)
+    
+    if verbose:
+        print(f"    ✓ Created {len(test_envs)} test episodes ({window_length} days each)")
+    
+    return test_envs
 
 
 def _create_legacy_environments(

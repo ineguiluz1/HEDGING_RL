@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 from config import CONFIG
+import os
 
 
 def black_scholes_price(S, K, T, r, sigma, option_type="call"):
@@ -100,31 +101,44 @@ def generate_mc_hedging_trajectory(
     mu=0.05,
     sigma=0.20,
     r=0.02,
-    T=1.0,
-    steps=252,
+    T=None,
+    steps=None,
     vol_window=20,
     rng=None,
-    start_date=None
+    start_date=None,
+    simulate_option_expiry=True
 ):
     """
     Generate a single Monte Carlo trajectory with option hedging data.
+    
+    Simulates a realistic option hedging scenario:
+    - At t=0: Option is sold, strike set at current spot (ATM)
+    - As time passes: TTM decreases linearly toward expiry
+    - At t=steps: Option expires (TTM=0)
     
     Args:
         S0: Initial stock price
         mu: Annual drift
         sigma: Annual volatility for GBM
         r: Risk-free rate
-        T: Time horizon (years)
-        steps: Number of time steps (trading days)
+        T: Time horizon (years). If None, uses mc_episode_length from config
+        steps: Number of time steps (trading days). If None, uses mc_episode_length from config
         vol_window: Window for realized volatility
         rng: Random number generator
         start_date: Start date for timestamps
+        simulate_option_expiry: If True, TTM decreases from initial to 0 (realistic option)
     
     Returns:
         pd.DataFrame: DataFrame with hedging data
     """
     if rng is None:
         rng = np.random.default_rng()
+    
+    # Get episode length from config if not provided
+    if steps is None:
+        steps = CONFIG.get("mc_episode_length", 30)
+    if T is None:
+        T = steps / CONFIG.get("mc_steps_per_year", 252)  # Convert days to years
     
     if start_date is None:
         start_date = pd.Timestamp('2020-01-01')
@@ -138,14 +152,20 @@ def generate_mc_hedging_trajectory(
     # Calculate realized volatility
     realized_vol = calculate_rolling_volatility(S, window=vol_window, annualization=252)
     
-    # Generate strike prices (ATM with small noise)
-    noise_moneyness = rng.normal(0, 0.005, steps+1)
-    K = S * (1 + noise_moneyness)
+    # Fixed strike price: ATM at inception (t=0) with small noise
+    # This simulates selling an option at the start of the episode
+    initial_moneyness_noise = rng.normal(0, 0.02)  # ±2% around ATM
+    K = np.full(steps + 1, S[0] * (1 + initial_moneyness_noise))  # Fixed strike throughout
     
-    # Time to maturity (rolling ~30 day contracts)
-    target_ttm = 30 / 365.0
-    noise_ttm = rng.normal(0, 0.001, steps+1)
-    ttm = np.clip(target_ttm + noise_ttm, 0.01, 0.2)
+    # Time to maturity: decreases linearly from initial TTM to near-zero at expiry
+    if simulate_option_expiry:
+        initial_ttm = steps / 252.0  # Initial TTM in years (e.g., 30/252 ≈ 0.119 years)
+        ttm = np.linspace(initial_ttm, 1/252.0, steps + 1)  # Decrease to ~1 day at expiry
+    else:
+        # Legacy behavior: rolling contracts with constant ~30 day TTM
+        target_ttm = 30 / 365.0
+        noise_ttm = rng.normal(0, 0.001, steps+1)
+        ttm = np.clip(target_ttm + noise_ttm, 0.01, 0.2)
     
     # Option prices using Black-Scholes
     option_prices = black_scholes_price(S, K, ttm, r, realized_vol)
@@ -171,24 +191,27 @@ def generate_mc_training_data(
     mu=None,
     sigma=None,
     r=None,
-    steps_per_year=None,
+    episode_length=None,
     vol_window=None,
     seed=None,
-    verbose=True
+    verbose=True,
+    plot_path=None
 ):
     """
     Generate Monte Carlo trajectories for training.
+    Each trajectory simulates one option hedging episode (e.g., 30 days until expiry).
     
     Args:
-        n_trajectories: Number of 1-year trajectories to generate
+        n_trajectories: Number of episode trajectories to generate
         S0: Initial price (uses config default if None)
         mu: Annual drift (uses config default if None)
         sigma: Annual volatility (uses config default if None)
         r: Risk-free rate (uses config default if None)
-        steps_per_year: Trading days per year (uses config default if None)
+        episode_length: Episode length in trading days (uses config default if None)
         vol_window: Volatility window (uses config default if None)
         seed: Random seed (uses config default if None)
         verbose: Whether to print progress
+        plot_path: Optional path to save trajectory plot (e.g., 'results/run_*/mc_trajectories.png')
     
     Returns:
         list: List of DataFrames, one per trajectory
@@ -202,53 +225,93 @@ def generate_mc_training_data(
         sigma = CONFIG.get("mc_volatility", 0.20)
     if r is None:
         r = CONFIG.get("risk_free_rate", 0.02)
-    if steps_per_year is None:
-        steps_per_year = CONFIG.get("mc_steps_per_year", 252)
+    if episode_length is None:
+        episode_length = CONFIG.get("mc_episode_length", 30)
     if vol_window is None:
         vol_window = CONFIG.get("vol_window", 20)
     if seed is None:
         seed = CONFIG.get("mc_seed", 42)
+    
+    # Calculate T (time horizon in years) from episode length
+    steps_per_year = CONFIG.get("mc_steps_per_year", 252)
+    T = episode_length / steps_per_year
     
     rng = np.random.default_rng(seed)
     trajectories = []
     
     if verbose:
         print(f"\nGenerating {n_trajectories} Monte Carlo trajectories...")
+        print(f"  Episode Length: {episode_length} trading days ({T*252:.1f} days)")
         print(f"  Initial Price: ${S0:.2f}")
         print(f"  Drift (μ): {mu*100:.1f}%")
         print(f"  Volatility (σ): {sigma*100:.1f}%")
-        print(f"  Steps/Year: {steps_per_year}")
+        print(f"  Simulates: Option sold at t=0, expires at t={episode_length}")
     
     for i in range(n_trajectories):
-        # Vary initial price slightly for each trajectory
-        S0_varied = S0 * rng.uniform(0.9, 1.1)
+        # Vary initial price significantly for each trajectory
+        # This helps the agent generalize across different price levels
+        S0_varied = S0 * rng.uniform(0.7, 1.3)
         
-        # Vary volatility slightly
-        sigma_varied = sigma * rng.uniform(0.8, 1.2)
+        # Vary volatility to simulate different market conditions
+        sigma_varied = sigma * rng.uniform(0.6, 1.5)
         
-        # Generate trajectory starting from a random year
-        start_year = 2010 + i % 10  # Cycle through years 2010-2019
-        start_date = pd.Timestamp(f'{start_year}-01-01')
+        # Random start date for diversity (doesn't affect simulation, just timestamps)
+        start_year = 2010 + i % 10
+        start_month = rng.integers(1, 13)
+        start_day = rng.integers(1, 28)
+        start_date = pd.Timestamp(f'{start_year}-{start_month:02d}-{start_day:02d}')
         
         df = generate_mc_hedging_trajectory(
             S0=S0_varied,
             mu=mu,
             sigma=sigma_varied,
             r=r,
-            T=1.0,  # 1 year
-            steps=steps_per_year,
+            T=T,
+            steps=episode_length,
             vol_window=vol_window,
             rng=rng,
-            start_date=start_date
+            start_date=start_date,
+            simulate_option_expiry=True  # Critical: TTM decreases to expiry
         )
         
         trajectories.append(df)
         
-        if verbose and (i + 1) % 10 == 0:
+        if verbose and (i + 1) % 100 == 0:
             print(f"  Generated {i + 1}/{n_trajectories} trajectories")
     
     if verbose:
-        print(f"  ✓ Generated {n_trajectories} trajectories ({steps_per_year} steps each)")
+        print(f"  ✓ Generated {n_trajectories} trajectories ({episode_length} steps each)")
+    
+    # Plot trajectories if path provided
+    if plot_path is not None:
+        try:
+            from importlib import import_module
+            mc_module = import_module('00_montecarlo_simulations')
+            plot_func = getattr(mc_module, 'plot_monte_carlo_trajectories')
+            
+            # Convert trajectories to paths array (n_trajectories x steps+1)
+            paths = np.array([df['underlying_price'].values for df in trajectories])
+            
+            # Use first trajectory's timestamps for x-axis
+            start_date = trajectories[0]['timestamp'].iloc[0]
+            
+            if verbose:
+                print(f"  Saving trajectory plot to: {plot_path}")
+            
+            # Plot and save
+            plot_func(
+                paths=paths,
+                start_date=start_date,
+                freq='B',
+                filename=plot_path,
+                figsize=(14, 8)
+            )
+            
+            if verbose:
+                print(f"  ✓ Plot saved to {plot_path}")
+        except Exception as e:
+            if verbose:
+                print(f"  ⚠ Warning: Could not save plot: {e}")
     
     return trajectories
 
@@ -256,15 +319,18 @@ def generate_mc_training_data(
 def generate_train_val_data(
     train_trajectories=None,
     seed=None,
-    verbose=True
+    verbose=True,
+    plot_path=None
 ):
     """
     Generate training dataset using Monte Carlo simulation.
+    Each trajectory represents one option hedging episode (30 days by default).
     
     Args:
         train_trajectories: Number of training trajectories (uses config if None)
         seed: Random seed
         verbose: Whether to print progress
+        plot_path: Optional path to save trajectory plot
     
     Returns:
         dict: {'train': list of DataFrames}
@@ -274,21 +340,27 @@ def generate_train_val_data(
     if seed is None:
         seed = CONFIG.get("mc_seed", 42)
     
+    episode_length = CONFIG.get("mc_episode_length", 30)
+    
     if verbose:
         print("\n" + "="*60)
         print("GENERATING MONTE CARLO DATA FOR TRAINING")
         print("="*60)
+        print(f"  Episode paradigm: {episode_length}-day option hedging windows")
+        print(f"  Each episode simulates: Option sold at t=0, expires at t={episode_length}")
     
     # Generate training data
     train_data = generate_mc_training_data(
         n_trajectories=train_trajectories,
         seed=seed,
-        verbose=verbose
+        verbose=verbose,
+        plot_path=plot_path
     )
     
     if verbose:
         total_train_steps = sum(len(df) for df in train_data)
-        print(f"\n  Training: {train_trajectories} trajectories ({total_train_steps:,} total steps)")
+        print(f"\n  Training: {train_trajectories} episodes ({total_train_steps:,} total steps)")
+        print(f"  Each episode: {episode_length} trading days")
         print("="*60 + "\n")
     
     return {
@@ -299,6 +371,7 @@ def generate_train_val_data(
 if __name__ == "__main__":
     # Test the generator
     print("Testing Monte Carlo Data Generator...")
+    print("Generating 30-day option hedging episodes...")
     
     # Generate sample data
     data = generate_train_val_data(
@@ -306,6 +379,13 @@ if __name__ == "__main__":
         verbose=True
     )
     
-    print("\nSample training trajectory:")
-    print(data['train'][0].head(10))
-    print(f"\nShape: {data['train'][0].shape}")
+    print("\nSample training trajectory (30-day option hedging episode):")
+    sample_df = data['train'][0]
+    print(sample_df.head(10))
+    print(f"\nShape: {sample_df.shape}")
+    print(f"\nTime-to-Maturity progression:")
+    print(f"  Start TTM: {sample_df['time_to_maturity'].iloc[0]:.4f} years ({sample_df['time_to_maturity'].iloc[0]*252:.1f} days)")
+    print(f"  End TTM:   {sample_df['time_to_maturity'].iloc[-1]:.4f} years ({sample_df['time_to_maturity'].iloc[-1]*252:.1f} days)")
+    print(f"\nStrike price (fixed throughout episode): ${sample_df['strike'].iloc[0]:.2f}")
+    print(f"Initial stock price: ${sample_df['underlying_price'].iloc[0]:.2f}")
+    print(f"Final stock price:   ${sample_df['underlying_price'].iloc[-1]:.2f}")

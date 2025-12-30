@@ -244,6 +244,13 @@ class HedgingEnv(gym.Env):
         xi = CONFIG.get("risk_aversion", 0.1)  # Risk aversion parameter ξ
         reward = step_pnl - xi * abs(step_pnl)
         
+        # Optional: Penalize extreme actions (near 0 or 1) to encourage variation
+        if CONFIG.get("use_delta_tracking_reward", False):
+            # Penalty that is 0 at 0.5 and increases quadratically towards 0 and 1
+            # This encourages the agent to use intermediate values
+            extreme_penalty = CONFIG.get("action_regularization", 0.01) * (target_hedge_ratio - 0.5) ** 2
+            reward -= extreme_penalty
+        
         # Traditional P&L calculation (for comparison and plotting)
         hedge_pnl_traditional = prev_position * (S_now - S_prev)
         option_pnl_traditional = -1 * self.notional * (O_now - O_prev)

@@ -3,10 +3,12 @@ CONFIG = {
     # ENVIRONMENT PARAMETERS
     
     # Financial Parameters
-    "transaction_cost": 0.1,          # Transaction cost as fraction of trade value (0.1% = 10 bps)
+    "transaction_cost": 0.001,          # Transaction cost as fraction of trade value (0.1% = 10 bps)
     "risk_free_rate": 0.02,             # Annual risk-free interest rate (2% = Treasury rate)        
     "notional": 1000,                   # Notional amount for option exposure ($1000)
-    "risk_aversion": 0.01,               # Risk aversion parameter ξ in paper's reward function
+    "risk_aversion": 0.01,              # Risk aversion parameter ξ in paper's reward function
+    "action_regularization": 0.005,     # Penalty for deviating from delta (encourages dynamic hedging)
+    "use_delta_tracking_reward": True,  # Add reward for tracking delta (encourages learning delta hedging)
     
     # Volatility Calculation
     "vol_window": 20,                   # Rolling window size for realized volatility calculation
@@ -20,8 +22,8 @@ CONFIG = {
     "annualization_factor": 252,        # Annualization factor for daily data (sqrt(252) for vol)
     
     # Action Space
-    "max_action": 1.0,                  # Maximum action value (100% of notional)
-    "min_action": -1.0,                 # Minimum action value (-100% of notional)
+    "max_action": 1.0,                  # Maximum action value (100% of notional = fully hedged)
+    "min_action": 0.0,                  # Minimum action value (0% = no hedge, never short)
     "use_action_bounds": True,          # Whether to enforce action bounds
     
     # Data Processing
@@ -35,6 +37,7 @@ CONFIG = {
     "num_episodes": 100,                # Number of episodes for single-env training
     "num_epochs": 10,                   # Number of epochs for multi-year training
     "update_every": 1,                  # Training updates every N steps
+    "warmup_steps": 5000,               # Random actions before training (5000 steps)
     "seed": 101,                        # Random seed for reproducibility
     "training_report_interval": 1,      # Episodes between training progress reports
     
@@ -50,18 +53,18 @@ CONFIG = {
     "policy_freq": 2,                   # Frequency of policy updates (every N critic updates)
     
     # Optimization
-    "actor_lr": 3e-6,                   # Learning rate for actor network
-    "critic_lr": 3e-6,                  # Learning rate for critic networks
+    "actor_lr": 3e-3,                   # Learning rate for actor network
+    "critic_lr": 3e-3,                  # Learning rate for critic networks
     "batch_size": 256,                  # Batch size for experience replay
     "replay_buffer_size": 100000,       # Maximum size of experience replay buffer
     
     # Exploration Strategy (Ornstein-Uhlenbeck Process)
-    "initial_noise": 0.3,               # Starting exploration noise level (30%)
-    "final_noise": 0.02,                # Final exploration noise level (5%)
-    "noise_decay_steps": 500000,        # Steps over which to decay exploration noise
-    "min_noise": 0.02,                  # Minimum noise level (never go below this)
+    "initial_noise": 0.5,               # Starting exploration noise level (50% - high for more variation)
+    "final_noise": 0.05,                # Final exploration noise level (5%)
+    "noise_decay_steps": 150000,        # Steps over which to decay exploration noise (~80% of training)
+    "min_noise": 0.05,                  # Minimum noise level (never go below this)
     "ou_theta": 0.15,                   # OU process mean reversion rate
-    "ou_sigma": 0.1,                    # OU process volatility parameter
+    "ou_sigma": 0.2,                    # OU process volatility parameter (increased for more exploration)
     
     # =============================================================================
     # DATA CONFIGURATION
@@ -78,16 +81,15 @@ CONFIG = {
     
     # Monte Carlo Parameters
     "use_montecarlo_training": True,               # Use MC trajectories for training
-    "mc_train_trajectories": 600,                   # Number of MC trajectories for training
-    "mc_steps_per_year": 252,                      # Trading days per year in MC simulation
-    "mc_initial_price": 100.0,                     # Initial price for MC simulation
-    "mc_drift": 0.05,                              # Annual drift (expected return)
-    "mc_volatility": 0.20,                         # Annual volatility for MC simulation
-    "mc_seed": 42,                                 # Seed for MC reproducibility
-    
-    # Data Splits (by year) - Used for test data from real S&P 500
+    "mc_train_trajectories": 6000,                  # Number of MC trajectories for training
+    "mc_episode_length": 30,                       # Episode length in trading days (30 = option expiry simulation)
+    "mc_steps_per_year": 252,                      # Trading days per year (for annualization calculations)
     "test_start_year": 2004,                       # Start year for test data (real data)
     "test_end_year": 2025,                         # End year for test data (real data)
+    
+    # Evaluation Episode Configuration
+    "test_episode_length": 30,                      # Episode length for test (30 days = option expiry)
+    "use_windowed_test": True,                     # Whether to use 30-day windows in test data
     
     # Data Columns
     "price_column": "mid",                          # Column name for option prices
