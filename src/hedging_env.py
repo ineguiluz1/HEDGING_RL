@@ -93,6 +93,9 @@ class HedgingEnv(gym.Env):
         # Delta tracking configuration
         self.include_delta_in_state = CONFIG.get("include_delta_in_state", True)
         self.delta_tracking_weight = CONFIG.get("delta_tracking_weight", 0.5)
+        
+        # Action mode: "absolute" (action = hedge ratio) or "adjustment" (action = delta + adjustment)
+        self.action_mode = CONFIG.get("action_mode", "adjustment")
 
         self.option_prices_raw = option_prices
         self.stock_prices_raw = stock_prices
@@ -144,8 +147,10 @@ class HedgingEnv(gym.Env):
         self.reward_history = []
         self.timestamp_history = []
 
-        # Observation space: 6 features + optional delta = 6 or 7
-        obs_dim = 7 if self.include_delta_in_state else 6
+        # Observation space: 7 base features + optional delta = 7 or 8
+        # Base: [option_price, stock_price, ttm, log_moneyness, realized_vol, position, log_return]
+        # With delta: + [bs_delta]
+        obs_dim = 8 if self.include_delta_in_state else 7
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
 
         if self.use_action_bounds:
@@ -165,6 +170,7 @@ class HedgingEnv(gym.Env):
             print(f"Transaction Cost: {self.transaction_cost}")
             print(f"Risk-Free Rate: {self.discount_rate}")
             print(f"Risk Aversion (ξ): {CONFIG.get('risk_aversion', 0.1)}")
+            print(f"Action Mode: {self.action_mode}")
             print(f"Delta Tracking Weight: {self.delta_tracking_weight}")
             print(f"Include Delta in State: {self.include_delta_in_state}")
             print(f"Normalization: {self._normalize_flag}")
@@ -244,14 +250,27 @@ class HedgingEnv(gym.Env):
     def _get_observation(self):
         pos = (self.position / self.notional) if self._normalize_flag else self.position
         
-        # Base observation: 6 features
+        # Calculate log-return (more stable for neural networks)
+        if self.current_step > 0:
+            S_now = self.stock_prices_raw[self.current_step]
+            S_prev = self.stock_prices_raw[self.current_step - 1]
+            log_return = np.log(S_now / S_prev) if S_prev > 0 else 0.0
+        else:
+            log_return = 0.0
+        
+        # Calculate log-moneyness (more representative for options)
+        log_moneyness = np.log(self.moneyness_raw[self.current_step]) if self.moneyness_raw[self.current_step] > 0 else 0.0
+        
+        # Enhanced observation space:
+        # [option_price, stock_price, ttm, log_moneyness, realized_vol, position, log_return]
         base_obs = [
             self.option_prices[self.current_step],
             self.stock_prices[self.current_step],
             self.ttm[self.current_step], 
-            self.moneyness[self.current_step],
+            log_moneyness,  # Changed from linear moneyness to log-moneyness
             self.realized_vol[self.current_step],
-            pos
+            pos,
+            log_return  # NEW: Log-return of underlying
         ]
         
         # Add Black-Scholes delta if configured (not normalized - always in [0,1])
@@ -273,7 +292,18 @@ class HedgingEnv(gym.Env):
         if self.use_action_bounds:
             action = np.clip(action, self.action_space.low, self.action_space.high)
         
-        target_hedge_ratio = action[0]  # new delta (agent's chosen hedge ratio)
+        # Get the theoretical Black-Scholes delta
+        bs_delta = self.bs_delta_raw[self.current_step]
+        
+        # Convert action to target hedge ratio based on action mode
+        if self.action_mode == "adjustment":
+            # Action is adjustment from delta: hedge = delta + adjustment
+            adjustment = action[0]
+            target_hedge_ratio = np.clip(bs_delta + adjustment, 0.0, 1.0)
+        else:
+            # Action is absolute hedge ratio
+            target_hedge_ratio = action[0]
+        
         self.position = np.clip(target_hedge_ratio * self.notional, -self.notional, self.notional)
         
         # Prices
@@ -295,36 +325,55 @@ class HedgingEnv(gym.Env):
         # Step reward (what agent optimizes)
         step_pnl = option_component + hedge_component - transaction_component
         
-        # Step reward with risk aversion
-        xi = CONFIG.get("risk_aversion", 0.1)  # Risk aversion parameter ξ
-        reward = step_pnl - xi * abs(step_pnl)
-        
-        # Scale reward to more stable range (avoid gradient explosion)
-        reward_scale = CONFIG.get("reward_scale", 10.0)  # Amplify small rewards
-        reward = reward * reward_scale
-        
         # ====================================================================
-        # DELTA TRACKING REWARD SHAPING
-        # Encourage following Black-Scholes delta with scaled penalty
+        # REWARD FUNCTION: Delta Tracking is PRIMARY objective
+        # For adjustment mode, reward encourages adjustment ≈ 0
         # ====================================================================
-        if CONFIG.get("use_delta_tracking_reward", False):
-            # Get the theoretical Black-Scholes delta
-            bs_delta = self.bs_delta_raw[self.current_step - 1]  # Use previous step's delta for the action
+        reward_type = CONFIG.get("reward_type", "delta_tracking")
+        xi = CONFIG.get("risk_aversion", 0.1)  # Always define xi for logging
+        
+        # Calculate tracking error (how far from delta)
+        tracking_error = (target_hedge_ratio - bs_delta) ** 2
+        
+        if reward_type == "delta_tracking":
+            # DELTA TRACKING REWARD
+            # In adjustment mode: reward is based on |adjustment| (want ≈ 0)
+            # Also includes small P&L variance penalty for financial performance
+            tracking_weight = CONFIG.get("delta_tracking_weight", 1.0)
+            pnl_weight = CONFIG.get("pnl_variance_weight", 0.1)
             
-            # Delta tracking: scaled penalty based on absolute deviation
-            # Use smaller weight and linear penalty (not squared) to avoid gradient explosion
-            delta_tracking_weight = self.delta_tracking_weight
-            delta_deviation = abs(target_hedge_ratio - bs_delta)
-            
-            # Scaled reward shaping: bonus for being close, penalty for being far
-            # If deviation < 0.1: small penalty (close enough)
-            # If deviation > 0.1: increasing penalty
-            if delta_deviation < 0.1:
-                delta_bonus = 0.01 * (0.1 - delta_deviation)  # Small bonus for tracking well
-                reward += delta_bonus
+            if self.action_mode == "adjustment":
+                # For adjustment mode, reward penalizes non-zero adjustments
+                # The optimal action is adjustment = 0 (i.e., follow delta exactly)
+                absolute_adjustment = abs(action[0])
+                reward = -tracking_weight * absolute_adjustment
+                # Small P&L variance component to ensure reasonable financial performance
+                reward -= pnl_weight * (step_pnl ** 2)
             else:
-                delta_penalty = delta_tracking_weight * (delta_deviation - 0.1)
-                reward -= delta_penalty
+                # For absolute mode, reward penalizes deviation from delta
+                absolute_tracking_error = abs(target_hedge_ratio - bs_delta)
+                reward = -tracking_weight * absolute_tracking_error
+                reward -= pnl_weight * (step_pnl ** 2)
+            
+        elif reward_type == "variance_minimization":
+            # VARIANCE MINIMIZATION (Deep Hedging style - Buehler et al.)
+            reward = -(step_pnl ** 2)
+            # Add tracking penalty
+            if CONFIG.get("use_delta_tracking_reward", False):
+                delta_tracking_weight = CONFIG.get("delta_tracking_weight", 0.1)
+                reward -= delta_tracking_weight * tracking_error
+            
+        elif reward_type == "cara_utility":
+            # CARA (Constant Absolute Risk Aversion) Utility
+            lambda_risk = CONFIG.get("cara_lambda", 1.0)
+            reward = -np.exp(-lambda_risk * step_pnl)
+            
+        else:  # "profit_seeking" - original behavior
+            reward = step_pnl - xi * abs(step_pnl)
+        
+        # Scale reward to stable range
+        reward_scale = CONFIG.get("reward_scale", 100.0)
+        reward = reward * reward_scale
         
         # Traditional P&L calculation (for comparison and plotting)
         hedge_pnl_traditional = prev_position * (S_now - S_prev)

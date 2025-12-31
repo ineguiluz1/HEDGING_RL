@@ -6,14 +6,19 @@ CONFIG = {
     "transaction_cost": 0.001,          # Transaction cost as fraction of trade value (0.1% = 10 bps)
     "risk_free_rate": 0.02,             # Annual risk-free interest rate (2% = Treasury rate)        
     "notional": 1000,                   # Notional amount for option exposure ($1000)
-    "risk_aversion": 0.01,              # Risk aversion parameter ξ in paper's reward function
-    "reward_scale": 10.0,               # Scale rewards to more stable range
     
-    # Delta Tracking Reward (critical for learning proper hedging)
-    "use_delta_tracking_reward": True,  # Re-enabled with conservative weight
-    "delta_tracking_weight": 0.05,      # Very conservative weight (was 0.1)
-    "action_regularization": 0.0,       # Disabled - conflict with delta tracking
-    "include_delta_in_state": True,     # Add Black-Scholes delta to observation space
+    # Reward Function Configuration
+    # Options: "delta_tracking" (PRIMARY), "variance_minimization", "cara_utility", "profit_seeking"
+    "reward_type": "delta_tracking",        # Track BS delta as primary objective
+    "delta_tracking_weight": 1.0,           # Weight for tracking error (main component)
+    "pnl_variance_weight": 0.1,             # Weight for P&L variance (secondary)
+    "cara_lambda": 1.0,                     # CARA utility risk parameter (only if reward_type="cara_utility")
+    "risk_aversion": 0.01,                  # Only used if reward_type="profit_seeking"
+    "reward_scale": 100.0,                  # Scale rewards for stable gradients
+    
+    # Delta Tracking (used by all reward types except profit_seeking)
+    "use_delta_tracking_reward": True,      # Enable tracking penalty for variance_min
+    "include_delta_in_state": True,         # Add Black-Scholes delta to observation space
     
     # Volatility Calculation
     "vol_window": 20,                   # Rolling window size for realized volatility calculation
@@ -26,9 +31,11 @@ CONFIG = {
     "trading_days_per_year": 252,       # Trading days per year (for metrics calculation)
     "annualization_factor": 252,        # Annualization factor for daily data (sqrt(252) for vol)
     
-    # Action Space
-    "max_action": 1.0,                  # Maximum action value (100% of notional = fully hedged)
-    "min_action": 0.0,                  # Minimum action value (0% = no hedge, never short)
+    # Action Space Configuration
+    # Two modes: "absolute" (action = hedge ratio) or "adjustment" (action = delta + adjustment)
+    "action_mode": "adjustment",        # "adjustment" is better for tracking delta
+    "max_action": 0.3,                  # Maximum adjustment from delta (+/-30%)
+    "min_action": -0.3,                 # Minimum adjustment from delta
     "use_action_bounds": True,          # Whether to enforce action bounds
     
     # Data Processing
@@ -64,12 +71,12 @@ CONFIG = {
     "replay_buffer_size": 100000,       # Maximum size of experience replay buffer
     
     # Exploration Strategy (Ornstein-Uhlenbeck Process)
-    "initial_noise": 0.5,               # Starting exploration noise level (50% - high for more variation)
+    "initial_noise": 0.8,               # Starting exploration noise level (80% - VERY high for more variation)
     "final_noise": 0.05,                # Final exploration noise level (5%)
     "noise_decay_steps": 150000,        # Steps over which to decay exploration noise (~80% of training)
     "min_noise": 0.05,                  # Minimum noise level (never go below this)
     "ou_theta": 0.15,                   # OU process mean reversion rate
-    "ou_sigma": 0.2,                    # OU process volatility parameter (increased for more exploration)
+    "ou_sigma": 0.4,                    # OU process volatility parameter (DOUBLED for more exploration)
     
     # =============================================================================
     # DATA CONFIGURATION
@@ -86,13 +93,20 @@ CONFIG = {
     
     # Monte Carlo Parameters
     "use_montecarlo_training": True,               # Use MC trajectories for training
-    "mc_train_trajectories": 6000,                  # Number of MC trajectories for training
+    "mc_train_trajectories": 6000,                 # Number of MC trajectories for training
     "mc_episode_length": 30,                       # Episode length in trading days (30 = option expiry simulation)
     "mc_steps_per_year": 252,                      # Trading days per year (for annualization calculations)
     "test_start_year": 2004,                       # Start year for test data (real data)
     "test_end_year": 2025,                         # End year for test data (real data)
     
-    # Mixed Market Conditions Training
+    # =============================================================================
+    # CURRICULUM LEARNING CONFIGURATION
+    # =============================================================================
+    # Train in phases: first neutral drift only, then introduce directional markets
+    "use_curriculum_learning": True,               # Enable curriculum learning
+    "curriculum_neutral_ratio": 0.4,               # First 40% of trajectories are neutral drift only
+    
+    # Mixed Market Conditions Training (used after curriculum phase)
     "mc_use_mixed_drift": True,                    # Use mixed bullish/bearish/neutral trajectories
     "mc_drift_distribution": {                     # Distribution of drift scenarios
         "bullish": 0.33,                           # 33% bullish trajectories (μ > 0)
@@ -101,7 +115,7 @@ CONFIG = {
     },
     "mc_drift_ranges": {                           # Drift ranges for each scenario (annual)
         "bullish": (0.05, 0.20),                   # +5% to +20% annual drift
-        "neutral": (-0.05, 0.05),                  # -5% to +5% annual drift
+        "neutral": (-0.05, 0.05),                  # -5% to +5% annual drift  
         "bearish": (-0.20, -0.05)                  # -20% to -5% annual drift
     },
     

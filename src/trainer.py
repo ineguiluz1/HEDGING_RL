@@ -295,8 +295,12 @@ def evaluate_agent(agent: TD3Agent, env, verbose: bool = True) -> Dict:
     episode_pnl = 0
     step_count = 0
     actions = []
+    hedge_ratios = []  # Store actual hedge ratios (for adjustment mode)
     rewards = []
     pnls = []
+    
+    # Check action mode
+    action_mode = CONFIG.get("action_mode", "absolute")
     
     done = False
     while not done:
@@ -307,6 +311,13 @@ def evaluate_agent(agent: TD3Agent, env, verbose: bool = True) -> Dict:
         q_values = None
         if CONFIG.get("log_q_values", True):
             q_values = agent.get_q_values(state, action)
+        
+        # For adjustment mode, calculate actual hedge ratio
+        if action_mode == "adjustment":
+            bs_delta = env.get_current_bs_delta()
+            hedge_ratio = np.clip(bs_delta + action[0], 0.0, 1.0)
+        else:
+            hedge_ratio = action[0] if hasattr(action, '__len__') else action
         
         # Take step - handle both old and new gymnasium API
         try:
@@ -326,11 +337,13 @@ def evaluate_agent(agent: TD3Agent, env, verbose: bool = True) -> Dict:
         step_count += 1
         
         actions.append(action[0] if hasattr(action, '__len__') else action)
+        hedge_ratios.append(hedge_ratio)
         rewards.append(reward)
         pnls.append(info.get('step_pnl', 0))
     
-    # Calculate statistics
+    # Calculate statistics - use hedge_ratios for mean_action (actual hedge)
     actions_arr = np.array(actions)
+    hedge_ratios_arr = np.array(hedge_ratios)
     rewards_arr = np.array(rewards)
     pnls_arr = np.array(pnls)
     
@@ -340,12 +353,14 @@ def evaluate_agent(agent: TD3Agent, env, verbose: bool = True) -> Dict:
         'steps': step_count,
         'cumulative_pnl': info.get('cumulative_pnl', 0),
         'cumulative_reward': info.get('cumulative_reward', 0),
-        'mean_action': np.mean(actions_arr),
-        'std_action': np.std(actions_arr),
+        'mean_action': np.mean(hedge_ratios_arr),  # Use actual hedge ratios
+        'std_action': np.std(hedge_ratios_arr),
+        'mean_adjustment': np.mean(actions_arr) if action_mode == "adjustment" else None,
         'mean_reward': np.mean(rewards_arr),
         'std_reward': np.std(rewards_arr),
         'sharpe_ratio': np.mean(pnls_arr) / (np.std(pnls_arr) + 1e-8) * np.sqrt(252),
-        'actions': actions_arr,
+        'actions': hedge_ratios_arr,  # Store actual hedge ratios
+        'raw_actions': actions_arr,   # Store raw actions (adjustments)
         'rewards': rewards_arr,
         'pnls': pnls_arr
     }
@@ -1062,6 +1077,7 @@ def evaluate_agent_multi_episode(agent: TD3Agent, test_envs: List, verbose: bool
     all_cumulative_pnls = []
     all_sharpes = []
     all_actions = []
+    all_tracking_errors = []  # NEW: Track deviation from BS delta
     episode_stats_list = []
     
     if verbose:
@@ -1070,7 +1086,7 @@ def evaluate_agent_multi_episode(agent: TD3Agent, test_envs: List, verbose: bool
         print(f"{'='*70}")
     
     for i, env in enumerate(test_envs):
-        # Evaluate single episode
+        # Evaluate single episode and collect tracking error
         stats = evaluate_agent(agent, env, verbose=False)
         
         all_rewards.append(stats['total_reward'])
@@ -1082,8 +1098,22 @@ def evaluate_agent_multi_episode(agent: TD3Agent, test_envs: List, verbose: bool
         all_actions.extend(stats['actions'].tolist())
         episode_stats_list.append(stats)
         
+        # Calculate tracking error for this episode (deviation from BS delta)
+        if hasattr(env, 'bs_delta_raw') and len(env.bs_delta_raw) > 0:
+            actions = stats['actions']
+            # Get BS deltas for the steps we took actions on
+            n_steps = min(len(actions), len(env.bs_delta_raw) - 1)
+            bs_deltas = env.bs_delta_raw[1:n_steps+1]  # Skip step 0
+            tracking_error = np.mean((actions[:n_steps] - bs_deltas) ** 2)
+            all_tracking_errors.append(tracking_error)
+        
         if verbose and (i + 1) % 50 == 0:
             print(f"  Evaluated {i + 1}/{len(test_envs)} episodes...")
+    
+    # Calculate tracking error statistics
+    mean_tracking_error = np.mean(all_tracking_errors) if all_tracking_errors else 0.0
+    std_tracking_error = np.std(all_tracking_errors) if all_tracking_errors else 0.0
+    rmse_tracking = np.sqrt(mean_tracking_error)  # Root Mean Squared Error
     
     # Aggregate statistics (all P&L values are normalized/comparable)
     aggregated_stats = {
@@ -1108,6 +1138,11 @@ def evaluate_agent_multi_episode(agent: TD3Agent, test_envs: List, verbose: bool
         'min_action': np.min(all_actions),
         'max_action': np.max(all_actions),
         
+        # NEW: Tracking error metrics (how well agent follows BS delta)
+        'mean_tracking_error': mean_tracking_error,
+        'std_tracking_error': std_tracking_error,
+        'rmse_tracking': rmse_tracking,  # Lower is better, 0 = perfect delta tracking
+        
         # Number of episodes
         'n_episodes': len(test_envs),
         
@@ -1117,7 +1152,8 @@ def evaluate_agent_multi_episode(agent: TD3Agent, test_envs: List, verbose: bool
         'all_pnls': all_pnls,
         'all_cumulative_pnls': all_cumulative_pnls,
         'all_sharpes': all_sharpes,
-        'all_actions': np.array(all_actions)
+        'all_actions': np.array(all_actions),
+        'all_tracking_errors': all_tracking_errors
     }
     
     if verbose:
@@ -1132,6 +1168,9 @@ def evaluate_agent_multi_episode(agent: TD3Agent, test_envs: List, verbose: bool
         print(f"\nAction Statistics (across all episodes):")
         print(f"  Mean Hedge Ratio: {aggregated_stats['mean_action']:.4f} ± {aggregated_stats['std_action']:.4f}")
         print(f"  Action Range: [{aggregated_stats['min_action']:.4f}, {aggregated_stats['max_action']:.4f}]")
+        print(f"\nTracking Error (deviation from BS Delta):")
+        print(f"  RMSE: {aggregated_stats['rmse_tracking']:.4f} (lower is better, 0 = perfect)")
+        print(f"  MSE: {aggregated_stats['mean_tracking_error']:.4f} ± {aggregated_stats['std_tracking_error']:.4f}")
         print(f"\nAggregated Totals:")
         print(f"  Total P&L: {aggregated_stats['total_pnl']:.4f}")
         print(f"  Total Reward: {aggregated_stats['total_reward']:.4f}")

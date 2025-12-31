@@ -251,10 +251,19 @@ def generate_mc_training_data(
         "bearish": (-0.20, -0.05)
     })
     
+    # Curriculum learning info
+    use_curriculum = CONFIG.get("use_curriculum_learning", False)
+    curriculum_neutral_ratio = CONFIG.get("curriculum_neutral_ratio", 0.4)
+    
     if verbose:
         print(f"\nGenerating {n_trajectories} Monte Carlo trajectories...")
         print(f"  Episode Length: {episode_length} trading days ({T*252:.1f} days)")
         print(f"  Initial Price: ${S0:.2f}")
+        if use_curriculum:
+            curriculum_count = int(n_trajectories * curriculum_neutral_ratio)
+            print(f"  CURRICULUM LEARNING ENABLED:")
+            print(f"    - Phase 1: {curriculum_count} trajectories with NEUTRAL drift only (learn hedging)")
+            print(f"    - Phase 2: {n_trajectories - curriculum_count} trajectories with mixed drift")
         if use_mixed_drift:
             print(f"  Drift Mode: MIXED (bullish/neutral/bearish)")
             print(f"    - Bullish ({drift_distribution['bullish']*100:.0f}%): μ in [{drift_ranges['bullish'][0]*100:.0f}%, {drift_ranges['bullish'][1]*100:.0f}%]")
@@ -268,6 +277,11 @@ def generate_mc_training_data(
     # Track drift distribution for verification
     drift_counts = {"bullish": 0, "neutral": 0, "bearish": 0}
     
+    # Curriculum learning configuration
+    use_curriculum = CONFIG.get("use_curriculum_learning", False)
+    curriculum_neutral_ratio = CONFIG.get("curriculum_neutral_ratio", 0.4)
+    curriculum_boundary = int(n_trajectories * curriculum_neutral_ratio) if use_curriculum else 0
+    
     for i in range(n_trajectories):
         # Vary initial price significantly for each trajectory
         # This helps the agent generalize across different price levels
@@ -276,9 +290,14 @@ def generate_mc_training_data(
         # Vary volatility to simulate different market conditions
         sigma_varied = sigma * rng.uniform(0.6, 1.5)
         
-        # Select drift based on mixed distribution or use fixed drift
-        if use_mixed_drift:
-            # Sample drift scenario
+        # CURRICULUM LEARNING: First N trajectories are neutral drift only
+        # This forces the agent to learn hedging before it can exploit directional moves
+        if use_curriculum and i < curriculum_boundary:
+            # Phase 1: Neutral drift only (learn to hedge, not trade)
+            mu_varied = rng.uniform(-0.02, 0.02)  # Very small drift (~0)
+            drift_counts["neutral"] += 1
+        elif use_mixed_drift:
+            # Phase 2 (or no curriculum): Sample drift scenario
             rand_val = rng.random()
             if rand_val < drift_distribution["bullish"]:
                 scenario = "bullish"

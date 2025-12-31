@@ -110,6 +110,9 @@ class TD3Agent:
             )
         )
         
+        # Get warmup steps from config (random exploration before learning starts)
+        warmup_steps = CONFIG.get("warmup_steps", 5000)
+        
         # Get seed for reproducibility
         seed = CONFIG.get("seed", 101)
         
@@ -119,7 +122,7 @@ class TD3Agent:
             env=env,
             learning_rate=model_config["actor_lr"],
             buffer_size=model_config["replay_buffer_size"],
-            learning_starts=self.batch_size,  # Start learning after enough samples
+            learning_starts=warmup_steps,  # Use warmup from config for proper exploration
             batch_size=model_config["batch_size"],
             tau=model_config["tau"],
             gamma=model_config["gamma"],

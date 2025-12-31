@@ -14,15 +14,35 @@ Configuration:
 
 import os
 import sys
+import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 import json
 from scipy.stats import norm
+import torch
 
 # Add src to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def set_all_seeds(seed: int):
+    """
+    Set all random seeds for reproducibility.
+    Same function as in run_training.py for consistency.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    
+    os.environ['PYTHONHASHSEED'] = str(seed)
 
 from config import CONFIG
 from td3_agent import TD3Agent, device
@@ -289,12 +309,16 @@ def main():
     # =========================================================================
     # CONFIGURATION - Edit these values to change what to evaluate
     # =========================================================================
-    MODEL_PATH = "results/run_20251230_144831/td3_model.zip"
+    MODEL_PATH = "results/run_20251231_122243/td3_model.zip"
     START_YEAR = 2004
     END_YEAR = 2025
     EPISODE_LENGTH = 30  # Days per episode (same as training)
     OUTPUT_PATH = None  # None = save next to model
     # =========================================================================
+    
+    # Set random seed for reproducibility (same as run_training.py)
+    seed = CONFIG.get("seed", 101)
+    set_all_seeds(seed)
     
     print(f"\n{'='*70}")
     print(f"REAL S&P 500 DATA EVALUATION")
@@ -302,6 +326,7 @@ def main():
     print(f"Model: {MODEL_PATH}")
     print(f"Test period: {START_YEAR}-{END_YEAR}")
     print(f"Episode length: {EPISODE_LENGTH} days")
+    print(f"Random seed: {seed}")
     print(f"{'='*70}\n")
     
     # Resolve model path (handle relative paths from workspace root)
