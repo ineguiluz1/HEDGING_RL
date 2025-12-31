@@ -93,7 +93,7 @@ CONFIG = {
     
     # Monte Carlo Parameters
     "use_montecarlo_training": True,               # Use MC trajectories for training
-    "mc_train_trajectories": 6000,                 # Number of MC trajectories for training
+    "mc_train_trajectories": 12000,                  # Number of MC trajectories for training (increased for better learning)
     "mc_episode_length": 30,                       # Episode length in trading days (30 = option expiry simulation)
     "mc_steps_per_year": 252,                      # Trading days per year (for annualization calculations)
     "test_start_year": 2004,                       # Start year for test data (real data)
@@ -105,6 +105,17 @@ CONFIG = {
     # Train in phases: first neutral drift only, then introduce directional markets
     "use_curriculum_learning": True,               # Enable curriculum learning
     "curriculum_neutral_ratio": 0.4,               # First 40% of trajectories are neutral drift only
+    
+    # VOLATILITY CURRICULUM: Train with increasing volatility
+    # Phase 1: Low vol (10-15%) - easy hedging
+    # Phase 2: Medium vol (15-25%) - normal markets
+    # Phase 3: High vol (25-40%) - challenging conditions
+    "use_volatility_curriculum": True,             # Enable volatility-based curriculum
+    "vol_curriculum_phases": {
+        "low": {"ratio": 0.30, "vol_range": (0.10, 0.15)},    # 30% easy
+        "medium": {"ratio": 0.40, "vol_range": (0.15, 0.25)}, # 40% medium
+        "high": {"ratio": 0.30, "vol_range": (0.25, 0.40)}    # 30% hard
+    },
     
     # Mixed Market Conditions Training (used after curriculum phase)
     "mc_use_mixed_drift": True,                    # Use mixed bullish/bearish/neutral trajectories

@@ -276,21 +276,58 @@ def generate_mc_training_data(
     
     # Track drift distribution for verification
     drift_counts = {"bullish": 0, "neutral": 0, "bearish": 0}
+    vol_counts = {"low": 0, "medium": 0, "high": 0}
     
-    # Curriculum learning configuration
+    # Curriculum learning configuration (drift-based)
     use_curriculum = CONFIG.get("use_curriculum_learning", False)
     curriculum_neutral_ratio = CONFIG.get("curriculum_neutral_ratio", 0.4)
     curriculum_boundary = int(n_trajectories * curriculum_neutral_ratio) if use_curriculum else 0
+    
+    # VOLATILITY CURRICULUM configuration
+    use_vol_curriculum = CONFIG.get("use_volatility_curriculum", False)
+    vol_phases = CONFIG.get("vol_curriculum_phases", {
+        "low": {"ratio": 0.30, "vol_range": (0.10, 0.15)},
+        "medium": {"ratio": 0.40, "vol_range": (0.15, 0.25)},
+        "high": {"ratio": 0.30, "vol_range": (0.25, 0.40)}
+    })
+    
+    # Calculate volatility phase boundaries
+    if use_vol_curriculum:
+        low_boundary = int(n_trajectories * vol_phases["low"]["ratio"])
+        medium_boundary = low_boundary + int(n_trajectories * vol_phases["medium"]["ratio"])
+        if verbose:
+            print(f"  VOLATILITY CURRICULUM ENABLED:")
+            print(f"    - Phase 1 (traj 0-{low_boundary-1}): Low vol {vol_phases['low']['vol_range'][0]*100:.0f}%-{vol_phases['low']['vol_range'][1]*100:.0f}%")
+            print(f"    - Phase 2 (traj {low_boundary}-{medium_boundary-1}): Medium vol {vol_phases['medium']['vol_range'][0]*100:.0f}%-{vol_phases['medium']['vol_range'][1]*100:.0f}%")
+            print(f"    - Phase 3 (traj {medium_boundary}-{n_trajectories-1}): High vol {vol_phases['high']['vol_range'][0]*100:.0f}%-{vol_phases['high']['vol_range'][1]*100:.0f}%")
     
     for i in range(n_trajectories):
         # Vary initial price significantly for each trajectory
         # This helps the agent generalize across different price levels
         S0_varied = S0 * rng.uniform(0.7, 1.3)
         
-        # Vary volatility to simulate different market conditions
-        sigma_varied = sigma * rng.uniform(0.6, 1.5)
+        # VOLATILITY CURRICULUM: Assign volatility based on trajectory index
+        if use_vol_curriculum:
+            if i < low_boundary:
+                # Phase 1: Low volatility (easy)
+                vol_range = vol_phases["low"]["vol_range"]
+                sigma_varied = rng.uniform(vol_range[0], vol_range[1])
+                vol_counts["low"] += 1
+            elif i < medium_boundary:
+                # Phase 2: Medium volatility (normal)
+                vol_range = vol_phases["medium"]["vol_range"]
+                sigma_varied = rng.uniform(vol_range[0], vol_range[1])
+                vol_counts["medium"] += 1
+            else:
+                # Phase 3: High volatility (challenging)
+                vol_range = vol_phases["high"]["vol_range"]
+                sigma_varied = rng.uniform(vol_range[0], vol_range[1])
+                vol_counts["high"] += 1
+        else:
+            # Default: Vary volatility randomly around base
+            sigma_varied = sigma * rng.uniform(0.6, 1.5)
         
-        # CURRICULUM LEARNING: First N trajectories are neutral drift only
+        # DRIFT CURRICULUM: First N trajectories are neutral drift only
         # This forces the agent to learn hedging before it can exploit directional moves
         if use_curriculum and i < curriculum_boundary:
             # Phase 1: Neutral drift only (learn to hedge, not trade)
@@ -340,6 +377,8 @@ def generate_mc_training_data(
         print(f"  ✓ Generated {n_trajectories} trajectories ({episode_length} steps each)")
         if use_mixed_drift:
             print(f"  Drift distribution: Bullish={drift_counts['bullish']}, Neutral={drift_counts['neutral']}, Bearish={drift_counts['bearish']}")
+        if use_vol_curriculum:
+            print(f"  Volatility curriculum: Low={vol_counts['low']}, Medium={vol_counts['medium']}, High={vol_counts['high']}")
     
     # Plot trajectories if path provided
     if plot_path is not None:

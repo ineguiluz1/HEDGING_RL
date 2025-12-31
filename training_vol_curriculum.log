@@ -1,0 +1,382 @@
+All random seeds set to 101 for reproducibility
+
+======================================================================
+TD3 HEDGING AGENT - FULL TRAINING PIPELINE
+======================================================================
+Results directory: results/run_20251231_124050
+Device: cuda
+Random seed: 101
+Training episodes: 200 x 30 days
+Test data: Real S&P 500 (2004-2025)
+Test mode: Windowed episodes
+Note: Single-pass training (no epochs, no validation to avoid overfitting)
+======================================================================
+
+Configuration saved to results/run_20251231_124050/config.json
+Step 1: Creating environments...
+
+============================================================
+CREATING ENVIRONMENTS (Monte Carlo Mode)
+============================================================
+  Training: 30-day Monte Carlo episodes
+  Testing:  30-day windows from real S&P 500
+
+============================================================
+GENERATING MONTE CARLO DATA FOR TRAINING
+============================================================
+  Episode paradigm: 30-day option hedging windows
+  Each episode simulates: Option sold at t=0, expires at t=30
+
+Generating 200 Monte Carlo trajectories...
+  Episode Length: 30 trading days (30.0 days)
+  Initial Price: $100.00
+  CURRICULUM LEARNING ENABLED:
+    - Phase 1: 80 trajectories with NEUTRAL drift only (learn hedging)
+    - Phase 2: 120 trajectories with mixed drift
+  Drift Mode: MIXED (bullish/neutral/bearish)
+    - Bullish (33%): μ in [5%, 20%]
+    - Neutral (34%): μ in [-5%, 5%]
+    - Bearish (33%): μ in [-20%, -5%]
+  Volatility (σ): 20.0%
+  Simulates: Option sold at t=0, expires at t=30
+  VOLATILITY CURRICULUM ENABLED:
+    - Phase 1 (traj 0-59): Low vol 10%-15%
+    - Phase 2 (traj 60-139): Medium vol 15%-25%
+    - Phase 3 (traj 140-199): High vol 25%-40%
+  Generated 100/200 trajectories
+  Generated 200/200 trajectories
+  ✓ Generated 200 trajectories (30 steps each)
+  Drift distribution: Bullish=51, Neutral=117, Bearish=32
+  Volatility curriculum: Low=60, Medium=80, High=60
+Trayectorias guardadas en: /home/adiez/Desktop/HEDGING_RL/data/montecarlo_paths.csv
+Formato: 1000 simulaciones × 1261 pasos temporales
+
+============================================================
+SIMULACIÓN MONTE CARLO - 5 año(s)
+============================================================
+Precio inicial (S0):      6672.41
+Retorno medio anual (μ):  0.0788 (7.88%)
+Volatilidad anual (σ):    0.1895 (18.95%)
+Número de simulaciones:   1000
+
+PRECIOS FINALES (después de 5 año(s)):
+  Media:                  9932.52
+  Mediana:                9134.52
+  Mínimo:                 2932.66
+  Máximo:                 34019.50
+============================================================
+
+Gráfico guardado en: /home/adiez/Desktop/HEDGING_RL/data/montecarlo_trajectories.png
+CSV guardado en: /home/adiez/Desktop/HEDGING_RL/data/montecarlo_paths.csv
+  Saving trajectory plot to: results/run_20251231_124050/mc_trajectories.png
+  ✓ Plot saved to results/run_20251231_124050/mc_trajectories.png
+
+  Training: 200 episodes (6,200 total steps)
+  Each episode: 30 trading days
+============================================================
+
+
+  ✓ Created 200 training environments (30 steps each)
+
+  Loading real S&P 500 data for testing...
+    Path: /home/adiez/Desktop/HEDGING_RL/src/../data/sp500_data.csv
+    Years: 2004 - 2025
+    Mode: 30-day windowed episodes (same as training)
+Cargando datos históricos desde /home/adiez/Desktop/HEDGING_RL/src/../data/sp500_data.csv...
+Usando 5505 datos diarios (sin interpolación).
+Generando contratos para 5505 pasos de tiempo...
+    ✓ Test data: 5505 daily observations
+    Date range: 2004-01-02 to 2025-11-17
+    Creating 183 non-overlapping 30-day test windows...
+    ✓ Created 183 test episodes (30 days each)
+
+  Training environments: 200 (30 days each)
+  Test environments: 183 (30-day windows)
+
+Step 2: Training TD3 Agent on 200 trajectories...
+
+============================================================
+TRAINING ON 200 TRAJECTORIES (single pass)
+============================================================
+  [  0.5%] Trajectory 127: Reward=-441.35, Steps=29
+  [  1.0%] Trajectory 78: Reward=-390.27, Steps=29
+  [  1.5%] Trajectory 24: Reward=-492.66, Steps=29
+  [  2.0%] Trajectory 79: Reward=-421.52, Steps=29
+  [  2.5%] Trajectory 158: Reward=-437.88, Steps=29
+  [  3.0%] Trajectory 198: Reward=-420.43, Steps=29
+  [  3.5%] Trajectory 6: Reward=-446.63, Steps=29
+  [  4.0%] Trajectory 97: Reward=-392.93, Steps=29
+  [  4.5%] Trajectory 3: Reward=-423.92, Steps=29
+  [  5.0%] Trajectory 14: Reward=-426.97, Steps=29
+  [  5.5%] Trajectory 73: Reward=-454.61, Steps=29
+  [  6.0%] Trajectory 128: Reward=-447.29, Steps=29
+  [  6.5%] Trajectory 159: Reward=-400.74, Steps=29
+  [  7.0%] Trajectory 88: Reward=-431.34, Steps=29
+  [  7.5%] Trajectory 149: Reward=-396.62, Steps=29
+  [  8.0%] Trajectory 72: Reward=-404.81, Steps=29
+  [  8.5%] Trajectory 96: Reward=-343.27, Steps=29
+  [  9.0%] Trajectory 16: Reward=-369.59, Steps=29
+  [  9.5%] Trajectory 191: Reward=-436.64, Steps=29
+  [ 10.0%] Trajectory 186: Reward=-462.20, Steps=29
+  [ 10.5%] Trajectory 19: Reward=-471.52, Steps=29
+  [ 11.0%] Trajectory 21: Reward=-402.87, Steps=29
+  [ 11.5%] Trajectory 17: Reward=-450.97, Steps=29
+  [ 12.0%] Trajectory 169: Reward=-515.80, Steps=29
+  [ 12.5%] Trajectory 64: Reward=-498.20, Steps=29
+  [ 13.0%] Trajectory 68: Reward=-430.61, Steps=29
+  [ 13.5%] Trajectory 46: Reward=-383.25, Steps=29
+  [ 14.0%] Trajectory 87: Reward=-450.46, Steps=29
+  [ 14.5%] Trajectory 107: Reward=-412.17, Steps=29
+  [ 15.0%] Trajectory 140: Reward=-433.14, Steps=29
+  [ 15.5%] Trajectory 172: Reward=-435.99, Steps=29
+  [ 16.0%] Trajectory 125: Reward=-514.91, Steps=29
+  [ 16.5%] Trajectory 187: Reward=-491.61, Steps=29
+  [ 17.0%] Trajectory 175: Reward=-433.55, Steps=29
+  [ 17.5%] Trajectory 180: Reward=-417.77, Steps=29
+  [ 18.0%] Trajectory 36: Reward=-432.94, Steps=29
+  [ 18.5%] Trajectory 22: Reward=-384.10, Steps=29
+  [ 19.0%] Trajectory 182: Reward=-428.11, Steps=29
+  [ 19.5%] Trajectory 193: Reward=-489.33, Steps=29
+  [ 20.0%] Trajectory 177: Reward=-429.49, Steps=29
+  [ 20.5%] Trajectory 58: Reward=-473.62, Steps=29
+  [ 21.0%] Trajectory 5: Reward=-460.98, Steps=29
+  [ 21.5%] Trajectory 93: Reward=-458.09, Steps=29
+  [ 22.0%] Trajectory 83: Reward=-389.22, Steps=29
+  [ 22.5%] Trajectory 31: Reward=-353.41, Steps=29
+  [ 23.0%] Trajectory 147: Reward=-418.37, Steps=29
+  [ 23.5%] Trajectory 157: Reward=-498.83, Steps=29
+  [ 24.0%] Trajectory 145: Reward=-479.95, Steps=29
+  [ 24.5%] Trajectory 44: Reward=-504.34, Steps=29
+  [ 25.0%] Trajectory 131: Reward=-441.41, Steps=29
+  [ 25.5%] Trajectory 15: Reward=-440.09, Steps=29
+  [ 26.0%] Trajectory 77: Reward=-399.22, Steps=29
+  [ 26.5%] Trajectory 60: Reward=-424.87, Steps=29
+  [ 27.0%] Trajectory 67: Reward=-435.20, Steps=29
+  [ 27.5%] Trajectory 18: Reward=-453.55, Steps=29
+  [ 28.0%] Trajectory 138: Reward=-473.98, Steps=29
+  [ 28.5%] Trajectory 75: Reward=-464.08, Steps=29
+  [ 29.0%] Trajectory 163: Reward=-371.14, Steps=29
+  [ 29.5%] Trajectory 153: Reward=-445.60, Steps=29
+  [ 30.0%] Trajectory 56: Reward=-403.79, Steps=29
+  [ 30.5%] Trajectory 120: Reward=-362.70, Steps=29
+  [ 31.0%] Trajectory 98: Reward=-363.35, Steps=29
+  [ 31.5%] Trajectory 106: Reward=-401.21, Steps=29
+  [ 32.0%] Trajectory 49: Reward=-478.35, Steps=29
+  [ 32.5%] Trajectory 119: Reward=-449.30, Steps=29
+  [ 33.0%] Trajectory 130: Reward=-500.37, Steps=29
+  [ 33.5%] Trajectory 81: Reward=-430.43, Steps=29
+  [ 34.0%] Trajectory 10: Reward=-380.66, Steps=29
+  [ 34.5%] Trajectory 155: Reward=-353.44, Steps=29
+  [ 35.0%] Trajectory 162: Reward=-466.55, Steps=29
+  [ 35.5%] Trajectory 89: Reward=-328.12, Steps=29
+  [ 36.0%] Trajectory 23: Reward=-457.18, Steps=29
+  [ 36.5%] Trajectory 25: Reward=-440.66, Steps=29
+  [ 37.0%] Trajectory 197: Reward=-477.46, Steps=29
+  [ 37.5%] Trajectory 62: Reward=-440.61, Steps=29
+  [ 38.0%] Trajectory 92: Reward=-456.41, Steps=29
+  [ 38.5%] Trajectory 12: Reward=-361.59, Steps=29
+  [ 39.0%] Trajectory 142: Reward=-437.12, Steps=29
+  [ 39.5%] Trajectory 4: Reward=-554.94, Steps=29
+  [ 40.0%] Trajectory 100: Reward=-416.26, Steps=29
+  [ 40.5%] Trajectory 34: Reward=-451.66, Steps=29
+  [ 41.0%] Trajectory 188: Reward=-491.86, Steps=29
+  [ 41.5%] Trajectory 166: Reward=-486.77, Steps=29
+  [ 42.0%] Trajectory 54: Reward=-388.92, Steps=29
+  [ 42.5%] Trajectory 112: Reward=-287.24, Steps=29
+  [ 43.0%] Trajectory 129: Reward=-549.02, Steps=29
+  [ 43.5%] Trajectory 84: Reward=-417.43, Steps=29
+  [ 44.0%] Trajectory 146: Reward=-341.30, Steps=29
+  [ 44.5%] Trajectory 103: Reward=-442.59, Steps=29
+  [ 45.0%] Trajectory 61: Reward=-372.82, Steps=29
+  [ 45.5%] Trajectory 195: Reward=-494.77, Steps=29
+  [ 46.0%] Trajectory 69: Reward=-491.92, Steps=29
+  [ 46.5%] Trajectory 95: Reward=-432.51, Steps=29
+  [ 47.0%] Trajectory 1: Reward=-420.73, Steps=29
+  [ 47.5%] Trajectory 2: Reward=-409.63, Steps=29
+  [ 48.0%] Trajectory 40: Reward=-480.05, Steps=29
+  [ 48.5%] Trajectory 200: Reward=-445.51, Steps=29
+  [ 49.0%] Trajectory 192: Reward=-545.60, Steps=29
+  [ 49.5%] Trajectory 66: Reward=-498.17, Steps=29
+  [ 50.0%] Trajectory 20: Reward=-420.56, Steps=29
+  [ 50.5%] Trajectory 104: Reward=-446.52, Steps=29
+  [ 51.0%] Trajectory 51: Reward=-415.73, Steps=29
+  [ 51.5%] Trajectory 134: Reward=-442.35, Steps=29
+  [ 52.0%] Trajectory 70: Reward=-399.84, Steps=29
+  [ 52.5%] Trajectory 121: Reward=-485.99, Steps=29
+  [ 53.0%] Trajectory 179: Reward=-470.77, Steps=29
+  [ 53.5%] Trajectory 113: Reward=-476.13, Steps=29
+  [ 54.0%] Trajectory 108: Reward=-508.25, Steps=29
+  [ 54.5%] Trajectory 11: Reward=-396.32, Steps=29
+  [ 55.0%] Trajectory 116: Reward=-375.40, Steps=29
+  [ 55.5%] Trajectory 185: Reward=-431.60, Steps=29
+  [ 56.0%] Trajectory 118: Reward=-402.34, Steps=29
+  [ 56.5%] Trajectory 126: Reward=-511.99, Steps=29
+  [ 57.0%] Trajectory 65: Reward=-370.60, Steps=29
+  [ 57.5%] Trajectory 52: Reward=-450.48, Steps=29
+  [ 58.0%] Trajectory 76: Reward=-460.15, Steps=29
+  [ 58.5%] Trajectory 8: Reward=-384.77, Steps=29
+  [ 59.0%] Trajectory 111: Reward=-459.02, Steps=29
+  [ 59.5%] Trajectory 90: Reward=-360.79, Steps=29
+  [ 60.0%] Trajectory 170: Reward=-432.26, Steps=29
+  [ 60.5%] Trajectory 156: Reward=-482.17, Steps=29
+  [ 61.0%] Trajectory 13: Reward=-337.64, Steps=29
+  [ 61.5%] Trajectory 35: Reward=-379.88, Steps=29
+  [ 62.0%] Trajectory 85: Reward=-478.96, Steps=29
+  [ 62.5%] Trajectory 176: Reward=-372.28, Steps=29
+  [ 63.0%] Trajectory 117: Reward=-492.83, Steps=29
+  [ 63.5%] Trajectory 136: Reward=-459.02, Steps=29
+  [ 64.0%] Trajectory 102: Reward=-456.26, Steps=29
+  [ 64.5%] Trajectory 150: Reward=-408.18, Steps=29
+  [ 65.0%] Trajectory 183: Reward=-432.18, Steps=29
+  [ 65.5%] Trajectory 110: Reward=-425.56, Steps=29
+  [ 66.0%] Trajectory 71: Reward=-459.19, Steps=29
+  [ 66.5%] Trajectory 27: Reward=-359.31, Steps=29
+  [ 67.0%] Trajectory 82: Reward=-381.46, Steps=29
+  [ 67.5%] Trajectory 99: Reward=-460.54, Steps=29
+  [ 68.0%] Trajectory 181: Reward=-412.33, Steps=29
+  [ 68.5%] Trajectory 151: Reward=-432.99, Steps=29
+  [ 69.0%] Trajectory 123: Reward=-417.13, Steps=29
+  [ 69.5%] Trajectory 94: Reward=-406.90, Steps=29
+  [ 70.0%] Trajectory 141: Reward=-345.97, Steps=29
+  [ 70.5%] Trajectory 29: Reward=-448.34, Steps=29
+  [ 71.0%] Trajectory 164: Reward=-395.93, Steps=29
+  [ 71.5%] Trajectory 122: Reward=-411.13, Steps=29
+  [ 72.0%] Trajectory 91: Reward=-429.26, Steps=29
+  [ 72.5%] Trajectory 174: Reward=-381.62, Steps=29
+  [ 73.0%] Trajectory 171: Reward=-403.79, Steps=29
+  [ 73.5%] Trajectory 133: Reward=-417.47, Steps=29
+  [ 74.0%] Trajectory 143: Reward=-386.32, Steps=29
+  [ 74.5%] Trajectory 178: Reward=-438.48, Steps=29
+  [ 75.0%] Trajectory 59: Reward=-454.85, Steps=29
+  [ 75.5%] Trajectory 173: Reward=-390.04, Steps=29
+  [ 76.0%] Trajectory 137: Reward=-398.43, Steps=29
+  [ 76.5%] Trajectory 109: Reward=-442.92, Steps=29
+  [ 77.0%] Trajectory 33: Reward=-409.66, Steps=29
+  [ 77.5%] Trajectory 148: Reward=-484.77, Steps=29
+  [ 78.0%] Trajectory 57: Reward=-424.62, Steps=29
+  [ 78.5%] Trajectory 144: Reward=-393.44, Steps=29
+  [ 79.0%] Trajectory 152: Reward=-394.93, Steps=29
+  [ 79.5%] Trajectory 28: Reward=-450.48, Steps=29
+  [ 80.0%] Trajectory 154: Reward=-475.00, Steps=29
+  [ 80.5%] Trajectory 199: Reward=-405.38, Steps=29
+  [ 81.0%] Trajectory 47: Reward=-408.83, Steps=29
+  [ 81.5%] Trajectory 168: Reward=-377.09, Steps=29
+  [ 82.0%] Trajectory 160: Reward=-438.65, Steps=29
+  [ 82.5%] Trajectory 114: Reward=-486.68, Steps=29
+  [ 83.0%] Trajectory 86: Reward=-420.60, Steps=29
+  [ 83.5%] Trajectory 43: Reward=-445.46, Steps=29
+  [ 84.0%] Trajectory 139: Reward=-396.16, Steps=29
+  [ 84.5%] Trajectory 63: Reward=-376.67, Steps=29
+  [ 85.0%] Trajectory 32: Reward=-412.81, Steps=29
+  [ 85.5%] Trajectory 53: Reward=-422.07, Steps=29
+  [ 86.0%] Trajectory 7: Reward=-438.45, Steps=29
+  [ 86.5%] Trajectory 105: Reward=-401.80, Steps=29
+  [ 87.0%] Trajectory 194: Reward=-802.15, Steps=29
+  [ 87.5%] Trajectory 124: Reward=-864.92, Steps=29
+  [ 88.0%] Trajectory 132: Reward=-529.42, Steps=29
+  [ 88.5%] Trajectory 45: Reward=-339.93, Steps=29
+  [ 89.0%] Trajectory 135: Reward=-814.56, Steps=29
+  [ 89.5%] Trajectory 189: Reward=-516.68, Steps=29
+  [ 90.0%] Trajectory 190: Reward=-792.23, Steps=29
+  [ 90.5%] Trajectory 101: Reward=-258.19, Steps=29
+  [ 91.0%] Trajectory 30: Reward=-318.28, Steps=29
+  [ 91.5%] Trajectory 196: Reward=-390.98, Steps=29
+  [ 92.0%] Trajectory 42: Reward=-199.62, Steps=29
+  [ 92.5%] Trajectory 184: Reward=-714.38, Steps=29
+  [ 93.0%] Trajectory 50: Reward=-555.18, Steps=29
+  [ 93.5%] Trajectory 37: Reward=-557.40, Steps=29
+  [ 94.0%] Trajectory 161: Reward=-385.28, Steps=29
+  [ 94.5%] Trajectory 41: Reward=-493.04, Steps=29
+  [ 95.0%] Trajectory 9: Reward=-762.91, Steps=29
+  [ 95.5%] Trajectory 74: Reward=-452.95, Steps=29
+  [ 96.0%] Trajectory 26: Reward=-416.48, Steps=29
+  [ 96.5%] Trajectory 165: Reward=-626.39, Steps=29
+  [ 97.0%] Trajectory 39: Reward=-313.09, Steps=29
+  [ 97.5%] Trajectory 48: Reward=-597.28, Steps=29
+  [ 98.0%] Trajectory 38: Reward=-219.77, Steps=29
+  [ 98.5%] Trajectory 55: Reward=-672.22, Steps=29
+  [ 99.0%] Trajectory 80: Reward=-559.17, Steps=29
+  [ 99.5%] Trajectory 167: Reward=-567.06, Steps=29
+  [100.0%] Trajectory 115: Reward=-662.07, Steps=29
+
+  Training Summary:
+    Total Trajectories: 200
+    Total Steps: 5,800
+    Avg Reward: -444.4491
+Model saved to results/run_20251231_124050/td3_model.zip
+
+Model saved to: results/run_20251231_124050/td3_model.pth
+Normalization stats saved to: results/run_20251231_124050/normalization_stats.json
+
+Step 3: Evaluating on Test Data...
+
+Evaluating RL Agent on 183 test episodes (30 days each)...
+
+======================================================================
+MULTI-EPISODE EVALUATION (183 episodes)
+======================================================================
+  Evaluated 50/183 episodes...
+  Evaluated 100/183 episodes...
+  Evaluated 150/183 episodes...
+
+======================================================================
+MULTI-EPISODE EVALUATION RESULTS
+======================================================================
+Number of Episodes: 183
+
+Per-Episode Statistics:
+  Mean Reward: -840.0475 ± 0.0935
+  Mean P&L: -0.0091 ± 0.0600
+  Mean Sharpe: -0.2236 ± 3.0450
+
+Action Statistics (across all episodes):
+  Mean Hedge Ratio: 0.3268 ± 0.2397
+  Action Range: [0.0000, 0.7000]
+
+Tracking Error (deviation from BS Delta):
+  RMSE: 0.2825 (lower is better, 0 = perfect)
+  MSE: 0.0798 ± 0.0160
+
+Aggregated Totals:
+  Total P&L: -1.6636
+  Total Reward: -153728.6864
+======================================================================
+
+Step 4: Running Delta Hedging Benchmark on 183 test episodes...
+
+Running benchmark on 183 episodes...
+  Benchmark evaluated 50/183 episodes...
+  Benchmark evaluated 100/183 episodes...
+  Benchmark evaluated 150/183 episodes...
+
+Benchmark Multi-Episode Results:
+  Episodes: 183
+  Mean Episode P&L: -0.0070 ± 0.0509
+  Total P&L: -1.2834
+  Mean Sharpe: 0.0340 ± 2.6527
+  Mean Delta: 0.5638
+
+======================================================================
+FINAL COMPARISON: RL Agent vs Delta Hedging
+  (Multi-Episode Evaluation: 183 x 30 days)/home/adiez/Desktop/HEDGING_RL/src/trainer.py:1266: UserWarning: FigureCanvasAgg is non-interactive, and thus cannot be shown
+  plt.show()
+
+======================================================================
+Metric                         RL Agent             Delta Hedge         
+----------------------------------------------------------------------
+Mean Episode P&L               -0.0091              -0.0070             
+Total P&L (all episodes)       -1.6636              -1.2834             
+Mean Sharpe Ratio              -0.2236              0.0340              
+Mean Hedge Ratio               0.3268               0.5638              
+======================================================================
+
+IMPROVEMENTS:
+  P&L Improvement: -0.3802 (-29.62%)
+  Sharpe Improvement: -0.2576
+
+❌ Delta Hedging outperforms RL Agent
+Multi-episode comparison plot saved to results/run_20251231_124050/multi_episode_results.png
+
+Results saved to: results/run_20251231_124050
+RL agent step data saved to: results/run_20251231_124050/rl_agent_steps.csv
+Benchmark step data saved to: results/run_20251231_124050/benchmark_steps.csv

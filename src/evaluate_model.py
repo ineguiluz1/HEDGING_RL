@@ -136,6 +136,7 @@ def create_test_environments_from_real_data(
 def run_benchmark_on_real_data_multi_episode(test_envs, verbose=True):
     """
     Run delta hedging benchmark on multiple test episodes from real data.
+    Uses the SAME implementation as run_training.py for consistency.
     
     Args:
         test_envs: List of HedgingEnv instances
@@ -144,64 +145,46 @@ def run_benchmark_on_real_data_multi_episode(test_envs, verbose=True):
     Returns:
         dict: Aggregated benchmark results
     """
+    # Import run_benchmark_on_env from run_training to ensure exact same logic
+    from run_training import run_benchmark_on_env
+    
     all_pnls = []
+    all_rewards = []
     all_sharpes = []
     all_deltas = []
+    all_episode_results = []
     
     if verbose:
         print(f"\nRunning benchmark on {len(test_envs)} episodes...")
     
     for i, env in enumerate(test_envs):
-        reset_result = env.reset()
+        # Use exact same benchmark function as run_training.py
+        results = run_benchmark_on_env(env, verbose=False)
         
-        episode_pnls = []
-        episode_deltas = []
-        done = False
-        
-        while not done:
-            # Calculate Black-Scholes delta
-            S = env.stock_prices_raw[env.current_step]
-            K = S / env.moneyness_raw[env.current_step]
-            T = max(env.ttm_raw[env.current_step], 1e-6)
-            r = env.discount_rate
-            sigma = max(env.realized_vol_raw[env.current_step], 0.01)
-            
-            d1 = (np.log(S/K) + (r + 0.5*sigma**2)*T) / (sigma*np.sqrt(T))
-            delta = norm.cdf(d1)
-            episode_deltas.append(delta)
-            
-            action = np.array([delta])
-            step_result = env.step(action)
-            
-            if len(step_result) == 5:
-                _, reward, terminated, truncated, info = step_result
-                done = terminated or truncated
-            else:
-                _, reward, done, info = step_result
-            
-            episode_pnls.append(info.get('step_pnl', reward))
-        
-        episode_pnl = np.sum(episode_pnls)
-        all_pnls.append(episode_pnl)
-        all_deltas.extend(episode_deltas)
-        
-        if len(episode_pnls) > 1 and np.std(episode_pnls) > 0:
-            sharpe = np.mean(episode_pnls) / np.std(episode_pnls) * np.sqrt(252)
-        else:
-            sharpe = 0
-        all_sharpes.append(sharpe)
+        all_pnls.append(results['cumulative_pnl'])
+        all_rewards.append(results['cumulative_reward'])
+        all_sharpes.append(results['sharpe_ratio'])
+        all_deltas.extend(results['df']['Delta'].tolist())
+        all_episode_results.append(results)
         
         if verbose and (i + 1) % 50 == 0:
             print(f"  Benchmark evaluated {i + 1}/{len(test_envs)} episodes...")
     
+    # Aggregate - same format as run_training.py
     return {
         'mean_episode_pnl': np.mean(all_pnls),
         'std_episode_pnl': np.std(all_pnls),
-        'total_cumulative_pnl': np.sum(all_pnls),
+        'total_cumulative_pnl': sum(all_pnls),
+        'total_cumulative_reward': sum(all_rewards),
         'mean_sharpe': np.mean(all_sharpes),
         'std_sharpe': np.std(all_sharpes),
         'mean_delta': np.mean(all_deltas),
-        'all_pnls': all_pnls
+        'std_delta': np.std(all_deltas),
+        'n_episodes': len(test_envs),
+        'all_pnls': all_pnls,
+        'all_rewards': all_rewards,
+        'all_sharpes': all_sharpes,
+        'episode_results': all_episode_results
     }
 
 
@@ -309,7 +292,7 @@ def main():
     # =========================================================================
     # CONFIGURATION - Edit these values to change what to evaluate
     # =========================================================================
-    MODEL_PATH = "results/run_20251231_122243/td3_model.zip"
+    MODEL_PATH = "results/run_20251231_124230/td3_model.zip"
     START_YEAR = 2004
     END_YEAR = 2025
     EPISODE_LENGTH = 30  # Days per episode (same as training)
