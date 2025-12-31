@@ -437,7 +437,7 @@ def main():
     # =========================================================================
     # CONFIGURATION - Edit these values to change what to evaluate
     # =========================================================================
-    MODEL_PATH = "results/run_20251230_120411/td3_model.zip"
+    MODEL_PATH = "results/run_20251230_150834/td3_model.zip"
     N_EPISODES = 200
     DRIFT = -0.15  # Annual drift (negative for bearish market)
     SEED = 42

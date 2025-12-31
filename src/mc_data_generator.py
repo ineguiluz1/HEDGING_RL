@@ -230,7 +230,8 @@ def generate_mc_training_data(
     if vol_window is None:
         vol_window = CONFIG.get("vol_window", 20)
     if seed is None:
-        seed = CONFIG.get("mc_seed", 42)
+        # Use main seed for consistency, fallback to mc_seed
+        seed = CONFIG.get("seed", CONFIG.get("mc_seed", 42))
     
     # Calculate T (time horizon in years) from episode length
     steps_per_year = CONFIG.get("mc_steps_per_year", 252)

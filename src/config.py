@@ -7,8 +7,13 @@ CONFIG = {
     "risk_free_rate": 0.02,             # Annual risk-free interest rate (2% = Treasury rate)        
     "notional": 1000,                   # Notional amount for option exposure ($1000)
     "risk_aversion": 0.01,              # Risk aversion parameter ξ in paper's reward function
-    "action_regularization": 0.005,     # Penalty for deviating from delta (encourages dynamic hedging)
-    "use_delta_tracking_reward": True,  # Add reward for tracking delta (encourages learning delta hedging)
+    "reward_scale": 10.0,               # Scale rewards to more stable range
+    
+    # Delta Tracking Reward (critical for learning proper hedging)
+    "use_delta_tracking_reward": True,  # Re-enabled with conservative weight
+    "delta_tracking_weight": 0.05,      # Very conservative weight (was 0.1)
+    "action_regularization": 0.0,       # Disabled - conflict with delta tracking
+    "include_delta_in_state": True,     # Add Black-Scholes delta to observation space
     
     # Volatility Calculation
     "vol_window": 20,                   # Rolling window size for realized volatility calculation
@@ -53,8 +58,8 @@ CONFIG = {
     "policy_freq": 2,                   # Frequency of policy updates (every N critic updates)
     
     # Optimization
-    "actor_lr": 3e-3,                   # Learning rate for actor network
-    "critic_lr": 3e-3,                  # Learning rate for critic networks
+    "actor_lr": 1e-4,                   # Learning rate for actor network (reduced from 3e-3)
+    "critic_lr": 1e-4,                  # Learning rate for critic networks (reduced from 3e-3)
     "batch_size": 256,                  # Batch size for experience replay
     "replay_buffer_size": 100000,       # Maximum size of experience replay buffer
     

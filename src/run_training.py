@@ -20,14 +20,46 @@ Author: Generated for HEDGING_RL project
 import os
 import sys
 import argparse
+import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 import json
+import torch
 
 # Add src to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def set_all_seeds(seed: int):
+    """
+    Set all random seeds for reproducibility.
+    
+    This ensures deterministic behavior across:
+    - Python's random module
+    - NumPy's random number generator
+    - PyTorch's random number generator (CPU and GPU)
+    - CUDA operations (if available)
+    
+    Args:
+        seed: Random seed to use
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        # Make CUDA operations deterministic (may impact performance)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    
+    # Set environment variable for additional determinism
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    
+    print(f"All random seeds set to {seed} for reproducibility")
 
 from config import CONFIG, get_environment_config
 from td3_agent import TD3Agent, device
@@ -98,6 +130,10 @@ def run_full_training_pipeline(
     Returns:
         dict: Results dictionary
     """
+    # Set all random seeds for reproducibility FIRST
+    seed = CONFIG.get("seed", 101)
+    set_all_seeds(seed)
+    
     if results_dir is None:
         results_dir = setup_results_dir()
     
@@ -106,6 +142,7 @@ def run_full_training_pipeline(
     print(f"{'='*70}")
     print(f"Results directory: {results_dir}")
     print(f"Device: {device}")
+    print(f"Random seed: {seed}")
     print(f"Training episodes: {CONFIG.get('mc_train_trajectories', 50)} x {CONFIG.get('mc_episode_length', 30)} days")
     print(f"Test data: Real S&P 500 ({CONFIG.get('test_start_year', 2004)}-{CONFIG.get('test_end_year', 2025)})")
     print(f"Test mode: {'Windowed episodes' if CONFIG.get('use_windowed_test', True) else 'Single long episode'}")
@@ -360,8 +397,10 @@ def train_multi_env(train_envs, verbose=True):
         print(f"TRAINING ON {n_trajectories} TRAJECTORIES (single pass)")
         print(f"{'='*60}")
     
-    # Shuffle environments
-    env_indices = np.random.permutation(n_trajectories)
+    # Shuffle environments with dedicated RNG for reproducibility
+    shuffle_seed = CONFIG.get("seed", 101)
+    shuffle_rng = np.random.default_rng(shuffle_seed)
+    env_indices = shuffle_rng.permutation(n_trajectories)
     
     all_rewards = []
     all_losses = []

@@ -289,7 +289,7 @@ def main():
     # =========================================================================
     # CONFIGURATION - Edit these values to change what to evaluate
     # =========================================================================
-    MODEL_PATH = "results/run_20251230_120411/td3_model.zip"
+    MODEL_PATH = "results/run_20251230_144831/td3_model.zip"
     START_YEAR = 2004
     END_YEAR = 2025
     EPISODE_LENGTH = 30  # Days per episode (same as training)

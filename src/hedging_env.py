@@ -2,8 +2,35 @@ import numpy as np
 import pandas as pd
 import gymnasium as gym
 from gymnasium import spaces
+from scipy.stats import norm
 from config import CONFIG, get_environment_config
 from volatility_utils import calculate_realized_volatility, fill_initial_volatility
+
+
+def calculate_bs_delta(moneyness, ttm, sigma, r=0.02):
+    """
+    Calculate Black-Scholes delta for a call option given moneyness.
+    
+    Args:
+        moneyness: S/K ratio
+        ttm: Time to maturity in years
+        sigma: Volatility
+        r: Risk-free rate
+    
+    Returns:
+        Delta value in [0, 1]
+    """
+    # Handle edge cases
+    if ttm <= 1/365.25:  # Less than 1 day
+        return 1.0 if moneyness > 1 else 0.0
+    if sigma <= 0.001 or np.isnan(sigma) or np.isnan(moneyness):
+        return 1.0 if moneyness > 1 else 0.5
+    
+    try:
+        d1 = (np.log(moneyness) + (r + 0.5 * sigma**2) * ttm) / (sigma * np.sqrt(ttm))
+        return float(norm.cdf(d1))
+    except:
+        return 0.5
 
 
 class HedgingEnv(gym.Env): 
@@ -62,12 +89,19 @@ class HedgingEnv(gym.Env):
         self.use_action_bounds = use_action_bounds
         self.action_low = action_low
         self.action_high = action_high
+        
+        # Delta tracking configuration
+        self.include_delta_in_state = CONFIG.get("include_delta_in_state", True)
+        self.delta_tracking_weight = CONFIG.get("delta_tracking_weight", 0.5)
 
         self.option_prices_raw = option_prices
         self.stock_prices_raw = stock_prices
         self.moneyness_raw = moneyness
         self.ttm_raw = ttm
         self.realized_vol_raw = self._calculate_realized_volatility()
+        
+        # Calculate Black-Scholes delta for each timestep (always raw, not normalized)
+        self.bs_delta_raw = self._calculate_bs_delta_series()
 
         if normalization_stats is None:
             self._compute_normalization_stats()
@@ -110,7 +144,9 @@ class HedgingEnv(gym.Env):
         self.reward_history = []
         self.timestamp_history = []
 
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(6,), dtype=np.float32)
+        # Observation space: 6 features + optional delta = 6 or 7
+        obs_dim = 7 if self.include_delta_in_state else 6
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
 
         if self.use_action_bounds:
             self.action_space = spaces.Box(
@@ -129,11 +165,14 @@ class HedgingEnv(gym.Env):
             print(f"Transaction Cost: {self.transaction_cost}")
             print(f"Risk-Free Rate: {self.discount_rate}")
             print(f"Risk Aversion (ξ): {CONFIG.get('risk_aversion', 0.1)}")
+            print(f"Delta Tracking Weight: {self.delta_tracking_weight}")
+            print(f"Include Delta in State: {self.include_delta_in_state}")
             print(f"Normalization: {self._normalize_flag}")
             print(f"Action Bounds: {self.use_action_bounds} [{self.action_low}, {self.action_high}]")
             print(f"Volatility Window: {self.vol_window}")
             print(f"Initial Volatility: {self.initial_vol}")
             print(f"Realized Vol Range: {self.realized_vol_raw.min():.4f} - {self.realized_vol_raw.max():.4f}")
+            print(f"BS Delta Range: {self.bs_delta_raw.min():.4f} - {self.bs_delta_raw.max():.4f}")
             print(f"{'='*70}\n")
 
     def _calculate_realized_volatility(self):
@@ -147,6 +186,18 @@ class HedgingEnv(gym.Env):
         filled_vol = fill_initial_volatility(realized_vol, self.initial_vol)
         
         return filled_vol.values
+    
+    def _calculate_bs_delta_series(self):
+        """Calculate Black-Scholes delta for each timestep."""
+        deltas = np.zeros(len(self.moneyness_raw))
+        for i in range(len(deltas)):
+            deltas[i] = calculate_bs_delta(
+                moneyness=self.moneyness_raw[i],
+                ttm=self.ttm_raw[i],
+                sigma=self.realized_vol_raw[i],
+                r=CONFIG.get("risk_free_rate", 0.02)
+            )
+        return deltas
 
     def _compute_normalization_stats(self):
         self.opt_mean = np.mean(self.option_prices_raw)
@@ -192,17 +243,28 @@ class HedgingEnv(gym.Env):
 
     def _get_observation(self):
         pos = (self.position / self.notional) if self._normalize_flag else self.position
-        obs = np.array([
+        
+        # Base observation: 6 features
+        base_obs = [
             self.option_prices[self.current_step],
             self.stock_prices[self.current_step],
             self.ttm[self.current_step], 
             self.moneyness[self.current_step],
             self.realized_vol[self.current_step],
             pos
-        ], dtype=np.float32)
+        ]
         
+        # Add Black-Scholes delta if configured (not normalized - always in [0,1])
+        if self.include_delta_in_state:
+            bs_delta = self.bs_delta_raw[self.current_step]
+            base_obs.append(bs_delta)
         
+        obs = np.array(base_obs, dtype=np.float32)
         return obs
+    
+    def get_current_bs_delta(self):
+        """Return the current Black-Scholes delta (for reward calculation)."""
+        return self.bs_delta_raw[self.current_step]
 
     def step(self, action, q_values=None):
         prev_position = self.position
@@ -211,13 +273,10 @@ class HedgingEnv(gym.Env):
         if self.use_action_bounds:
             action = np.clip(action, self.action_space.low, self.action_space.high)
         
-        # self.position = action[0] * self.notional
-        # max_change = self.notional * 0.1  # Max 10% position change per step
-        # position_change = action[0] * max_change
-        # self.position = np.clip(self.position + position_change, -self.notional, self.notional)
-        target_hedge_ratio = action[0]  # new delta
-        self.position = np.clip(target_hedge_ratio * self.notional, -self.notional, self.notional) # delta scaled by notional, so how much we should actually buy/sell
-        #prices
+        target_hedge_ratio = action[0]  # new delta (agent's chosen hedge ratio)
+        self.position = np.clip(target_hedge_ratio * self.notional, -self.notional, self.notional)
+        
+        # Prices
         S_prev = self.stock_prices_raw[self.current_step - 1]
         S_now = self.stock_prices_raw[self.current_step]
         
@@ -229,14 +288,10 @@ class HedgingEnv(gym.Env):
         
         # Option component: HO_t * (Ct - Ct-1)
         option_component = HO_t * (O_now - O_prev) / (self.notional)  
-        # hedge_component = prev_position * (S_now - S_prev) / (self.notional) 
         hedge_component = (prev_position / self.notional) * (S_now / S_prev - 1)
         hedge_adjustment = (self.position - prev_position) / S_now
         transaction_component = self.transaction_cost * S_now * abs(hedge_adjustment) / (self.notional)   
 
-        # Transaction cost component: c * |St| * |HS_t - HS_t-1|
-
-        
         # Step reward (what agent optimizes)
         step_pnl = option_component + hedge_component - transaction_component
         
@@ -244,12 +299,32 @@ class HedgingEnv(gym.Env):
         xi = CONFIG.get("risk_aversion", 0.1)  # Risk aversion parameter ξ
         reward = step_pnl - xi * abs(step_pnl)
         
-        # Optional: Penalize extreme actions (near 0 or 1) to encourage variation
+        # Scale reward to more stable range (avoid gradient explosion)
+        reward_scale = CONFIG.get("reward_scale", 10.0)  # Amplify small rewards
+        reward = reward * reward_scale
+        
+        # ====================================================================
+        # DELTA TRACKING REWARD SHAPING
+        # Encourage following Black-Scholes delta with scaled penalty
+        # ====================================================================
         if CONFIG.get("use_delta_tracking_reward", False):
-            # Penalty that is 0 at 0.5 and increases quadratically towards 0 and 1
-            # This encourages the agent to use intermediate values
-            extreme_penalty = CONFIG.get("action_regularization", 0.01) * (target_hedge_ratio - 0.5) ** 2
-            reward -= extreme_penalty
+            # Get the theoretical Black-Scholes delta
+            bs_delta = self.bs_delta_raw[self.current_step - 1]  # Use previous step's delta for the action
+            
+            # Delta tracking: scaled penalty based on absolute deviation
+            # Use smaller weight and linear penalty (not squared) to avoid gradient explosion
+            delta_tracking_weight = self.delta_tracking_weight
+            delta_deviation = abs(target_hedge_ratio - bs_delta)
+            
+            # Scaled reward shaping: bonus for being close, penalty for being far
+            # If deviation < 0.1: small penalty (close enough)
+            # If deviation > 0.1: increasing penalty
+            if delta_deviation < 0.1:
+                delta_bonus = 0.01 * (0.1 - delta_deviation)  # Small bonus for tracking well
+                reward += delta_bonus
+            else:
+                delta_penalty = delta_tracking_weight * (delta_deviation - 0.1)
+                reward -= delta_penalty
         
         # Traditional P&L calculation (for comparison and plotting)
         hedge_pnl_traditional = prev_position * (S_now - S_prev)

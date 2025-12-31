@@ -41,8 +41,7 @@ def fill_initial_volatility(realized_vol, initial_vol_value=None):
         random_initial_vol = np.random.uniform(vol_min, vol_max)
         filled_vol.iloc[0] = random_initial_vol
         
-        if CONFIG.get("verbose_evaluation", False):
-            print(f"Random initial volatility: {random_initial_vol:.4f} (range: {vol_min:.2f}-{vol_max:.2f})")
+        # Removed verbose print to reduce log spam
     
     filled_vol = filled_vol.fillna(initial_vol_value)
     

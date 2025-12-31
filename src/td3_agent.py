@@ -110,6 +110,9 @@ class TD3Agent:
             )
         )
         
+        # Get seed for reproducibility
+        seed = CONFIG.get("seed", 101)
+        
         # Create TD3 model
         self.model = TD3(
             policy="MlpPolicy",
@@ -128,7 +131,8 @@ class TD3Agent:
             target_noise_clip=model_config["noise_clip"],
             policy_kwargs=policy_kwargs,
             verbose=0,
-            device=device
+            device=device,
+            seed=seed  # Set seed for SB3 reproducibility
         )
         
         # Configure logger for SB3 (required for train() method)
