@@ -33,6 +33,76 @@ def calculate_bs_delta(moneyness, ttm, sigma, r=0.02):
         return 0.5
 
 
+def calculate_bs_greeks(S, K, ttm, sigma, r=0.02):
+    """
+    Calculate Black-Scholes Greeks for a call option.
+    
+    Args:
+        S: Stock price
+        K: Strike price  
+        ttm: Time to maturity in years
+        sigma: Volatility
+        r: Risk-free rate
+    
+    Returns:
+        dict: Dictionary with delta, gamma, vega, vanna
+    """
+    # Handle edge cases
+    if ttm <= 1/365.25:  # Less than 1 day
+        moneyness = S / K if K > 0 else 1.0
+        return {
+            'delta': 1.0 if moneyness > 1 else 0.0,
+            'gamma': 0.0,
+            'vega': 0.0,
+            'vanna': 0.0
+        }
+    if sigma <= 0.001 or np.isnan(sigma) or K <= 0:
+        return {
+            'delta': 0.5,
+            'gamma': 0.0,
+            'vega': 0.0,
+            'vanna': 0.0
+        }
+    
+    try:
+        sqrt_t = np.sqrt(ttm)
+        d1 = (np.log(S/K) + (r + 0.5 * sigma**2) * ttm) / (sigma * sqrt_t)
+        d2 = d1 - sigma * sqrt_t
+        
+        # Standard normal PDF at d1
+        n_d1 = norm.pdf(d1)
+        
+        # Delta: N(d1)
+        delta = float(norm.cdf(d1))
+        
+        # Gamma: n(d1) / (S * sigma * sqrt(T))
+        # Measures how fast delta changes with stock price
+        gamma = n_d1 / (S * sigma * sqrt_t)
+        
+        # Vega: S * n(d1) * sqrt(T) / 100
+        # Sensitivity to volatility (divided by 100 for 1% vol change)
+        vega = S * n_d1 * sqrt_t / 100.0
+        
+        # Vanna: -n(d1) * d2 / sigma
+        # Sensitivity of delta to volatility (cross-Greek)
+        # Also equals: d(vega)/d(S)
+        vanna = -n_d1 * d2 / sigma
+        
+        return {
+            'delta': delta,
+            'gamma': float(gamma),
+            'vega': float(vega),
+            'vanna': float(vanna)
+        }
+    except:
+        return {
+            'delta': 0.5,
+            'gamma': 0.0,
+            'vega': 0.0,
+            'vanna': 0.0
+        }
+
+
 class HedgingEnv(gym.Env): 
     def __init__(
         self,
@@ -94,6 +164,9 @@ class HedgingEnv(gym.Env):
         self.include_delta_in_state = CONFIG.get("include_delta_in_state", True)
         self.delta_tracking_weight = CONFIG.get("delta_tracking_weight", 0.5)
         
+        # Greeks in state (for better hedging decisions)
+        self.include_greeks_in_state = CONFIG.get("include_greeks_in_state", True)
+        
         # Action mode: "absolute" (action = hedge ratio) or "adjustment" (action = delta + adjustment)
         self.action_mode = CONFIG.get("action_mode", "adjustment")
 
@@ -105,6 +178,14 @@ class HedgingEnv(gym.Env):
         
         # Calculate Black-Scholes delta for each timestep (always raw, not normalized)
         self.bs_delta_raw = self._calculate_bs_delta_series()
+        
+        # Calculate Greeks series (Gamma, Vega, Vanna) for enhanced state
+        if self.include_greeks_in_state:
+            self._calculate_greeks_series()
+        
+        # Calculate implied volatility proxy (using MC vol as "implied")
+        # Vol spread = realized_vol - implied_vol (positive = gamma costs higher)
+        self.implied_vol = CONFIG.get("mc_volatility", 0.20)  # Use MC vol as proxy for implied
 
         if normalization_stats is None:
             self._compute_normalization_stats()
@@ -147,10 +228,16 @@ class HedgingEnv(gym.Env):
         self.reward_history = []
         self.timestamp_history = []
 
-        # Observation space: 7 base features + optional delta = 7 or 8
-        # Base: [option_price, stock_price, ttm, log_moneyness, realized_vol, position, log_return]
-        # With delta: + [bs_delta]
-        obs_dim = 8 if self.include_delta_in_state else 7
+        # Observation space dimensions:
+        # Base: [option_price, stock_price, ttm, log_moneyness, realized_vol, position, log_return] = 7
+        # + delta: [bs_delta] = +1
+        # + greeks: [gamma, vega, vanna, vol_spread] = +4
+        obs_dim = 7
+        if self.include_delta_in_state:
+            obs_dim += 1  # bs_delta
+        if self.include_greeks_in_state:
+            obs_dim += 4  # gamma, vega, vanna, vol_spread
+        
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
 
         if self.use_action_bounds:
@@ -179,6 +266,12 @@ class HedgingEnv(gym.Env):
             print(f"Initial Volatility: {self.initial_vol}")
             print(f"Realized Vol Range: {self.realized_vol_raw.min():.4f} - {self.realized_vol_raw.max():.4f}")
             print(f"BS Delta Range: {self.bs_delta_raw.min():.4f} - {self.bs_delta_raw.max():.4f}")
+            print(f"Include Greeks: {self.include_greeks_in_state}")
+            if self.include_greeks_in_state:
+                print(f"  Gamma Range: {self.gamma_raw.min():.6f} - {self.gamma_raw.max():.6f}")
+                print(f"  Vega Range: {self.vega_raw.min():.4f} - {self.vega_raw.max():.4f}")
+                print(f"  Vanna Range: {self.vanna_raw.min():.6f} - {self.vanna_raw.max():.6f}")
+            print(f"Observation Dim: {obs_dim}")
             print(f"{'='*70}\n")
 
     def _calculate_realized_volatility(self):
@@ -204,6 +297,44 @@ class HedgingEnv(gym.Env):
                 r=CONFIG.get("risk_free_rate", 0.02)
             )
         return deltas
+    
+    def _calculate_greeks_series(self):
+        """
+        Calculate Greeks (Gamma, Vega, Vanna) for each timestep.
+        These give the agent "forward-looking" information about how delta will change.
+        """
+        n = len(self.moneyness_raw)
+        self.gamma_raw = np.zeros(n)
+        self.vega_raw = np.zeros(n)
+        self.vanna_raw = np.zeros(n)
+        
+        r = CONFIG.get("risk_free_rate", 0.02)
+        
+        for i in range(n):
+            S = self.stock_prices_raw[i]
+            moneyness = self.moneyness_raw[i]
+            K = S / moneyness if moneyness > 0 else S
+            ttm = self.ttm_raw[i]
+            sigma = self.realized_vol_raw[i]
+            
+            greeks = calculate_bs_greeks(S, K, ttm, sigma, r)
+            
+            self.gamma_raw[i] = greeks['gamma']
+            self.vega_raw[i] = greeks['vega']
+            self.vanna_raw[i] = greeks['vanna']
+        
+        # Normalize Greeks for neural network stability
+        # Gamma: typically very small, scale up
+        self.gamma_mean = np.mean(self.gamma_raw)
+        self.gamma_std = np.std(self.gamma_raw) + 1e-8
+        
+        # Vega: can vary widely
+        self.vega_mean = np.mean(self.vega_raw)
+        self.vega_std = np.std(self.vega_raw) + 1e-8
+        
+        # Vanna: can be positive or negative
+        self.vanna_mean = np.mean(self.vanna_raw)
+        self.vanna_std = np.std(self.vanna_raw) + 1e-8
 
     def _compute_normalization_stats(self):
         self.opt_mean = np.mean(self.option_prices_raw)
@@ -278,6 +409,30 @@ class HedgingEnv(gym.Env):
             bs_delta = self.bs_delta_raw[self.current_step]
             base_obs.append(bs_delta)
         
+        # Add Greeks for forward-looking hedging decisions
+        if self.include_greeks_in_state:
+            # Gamma: How fast delta changes (normalized)
+            # High gamma = need more frequent rebalancing
+            gamma_norm = (self.gamma_raw[self.current_step] - self.gamma_mean) / self.gamma_std
+            base_obs.append(gamma_norm)
+            
+            # Vega: Sensitivity to volatility (normalized)
+            # High vega = vol changes matter more
+            vega_norm = (self.vega_raw[self.current_step] - self.vega_mean) / self.vega_std
+            base_obs.append(vega_norm)
+            
+            # Vanna: Cross-sensitivity (delta to vol)
+            # High vanna = delta will shift if vol changes
+            vanna_norm = (self.vanna_raw[self.current_step] - self.vanna_mean) / self.vanna_std
+            base_obs.append(vanna_norm)
+            
+            # Vol spread: realized_vol - implied_vol
+            # Positive spread = gamma costs higher than priced, hedge more aggressively
+            vol_spread = self.realized_vol_raw[self.current_step] - self.implied_vol
+            # Normalize vol spread (typical range -0.2 to +0.2)
+            vol_spread_norm = vol_spread / 0.1  # Scale so typical values are in [-2, 2]
+            base_obs.append(vol_spread_norm)
+        
         obs = np.array(base_obs, dtype=np.float32)
         return obs
     
@@ -338,22 +493,27 @@ class HedgingEnv(gym.Env):
         if reward_type == "delta_tracking":
             # DELTA TRACKING REWARD
             # In adjustment mode: reward is based on |adjustment| (want ≈ 0)
-            # Also includes small P&L variance penalty for financial performance
+            # Also includes P&L variance penalty and transaction cost penalty
             tracking_weight = CONFIG.get("delta_tracking_weight", 1.0)
             pnl_weight = CONFIG.get("pnl_variance_weight", 0.1)
+            tc_weight = CONFIG.get("transaction_cost_weight", 1.0)  # NEW: Transaction cost penalty
             
             if self.action_mode == "adjustment":
                 # For adjustment mode, reward penalizes non-zero adjustments
                 # The optimal action is adjustment = 0 (i.e., follow delta exactly)
                 absolute_adjustment = abs(action[0])
                 reward = -tracking_weight * absolute_adjustment
-                # Small P&L variance component to ensure reasonable financial performance
+                # P&L variance component for financial performance
                 reward -= pnl_weight * (step_pnl ** 2)
+                # Transaction cost penalty: penalize trading activity
+                # This teaches the agent that rebalancing has a real cost
+                reward -= tc_weight * transaction_component
             else:
                 # For absolute mode, reward penalizes deviation from delta
                 absolute_tracking_error = abs(target_hedge_ratio - bs_delta)
                 reward = -tracking_weight * absolute_tracking_error
                 reward -= pnl_weight * (step_pnl ** 2)
+                reward -= tc_weight * transaction_component
             
         elif reward_type == "variance_minimization":
             # VARIANCE MINIMIZATION (Deep Hedging style - Buehler et al.)
@@ -524,11 +684,15 @@ class HedgingEnv(gym.Env):
             'option_pnl': option_pnl_traditional,     # Traditional option P&L
             'hedge_pnl': hedge_pnl_traditional,       # Traditional hedge P&L
             'trade_cost': trade_cost_traditional,     # Traditional transaction costs
+            'transaction_component': transaction_component,  # Normalized TC for reward
             'total_pnl': total_pnl_traditional,       # Traditional total P&L
             'portfolio_value': portfolio_value,
             'daily_return': daily_return,
             'cumulative_return': cumulative_return,
             'realized_vol': self.realized_vol_raw[self.current_step - 1],
+            'hedge_adjustment': hedge_adjustment,     # Position change / S
+            'target_hedge_ratio': target_hedge_ratio, # The actual hedge ratio used
+            'bs_delta': bs_delta,                     # The BS delta at this step
             'q_values': q_values 
         }
 

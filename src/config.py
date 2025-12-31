@@ -12,6 +12,7 @@ CONFIG = {
     "reward_type": "delta_tracking",        # Track BS delta as primary objective
     "delta_tracking_weight": 1.0,           # Weight for tracking error (main component)
     "pnl_variance_weight": 0.1,             # Weight for P&L variance (secondary)
+    "transaction_cost_weight": 1.0,         # Weight for transaction cost penalty (teaches cost of rebalancing)
     "cara_lambda": 1.0,                     # CARA utility risk parameter (only if reward_type="cara_utility")
     "risk_aversion": 0.01,                  # Only used if reward_type="profit_seeking"
     "reward_scale": 100.0,                  # Scale rewards for stable gradients
@@ -19,6 +20,11 @@ CONFIG = {
     # Delta Tracking (used by all reward types except profit_seeking)
     "use_delta_tracking_reward": True,      # Enable tracking penalty for variance_min
     "include_delta_in_state": True,         # Add Black-Scholes delta to observation space
+    "include_greeks_in_state": True,        # Add Gamma, Vega, Vanna, Vol Spread to state
+                                            # Gamma: urgency of rebalancing (delta curvature)
+                                            # Vega: sensitivity to vol changes
+                                            # Vanna: delta-vol cross sensitivity
+                                            # Vol Spread: realized vs implied vol (gamma cost indicator)
     
     # Volatility Calculation
     "vol_window": 20,                   # Rolling window size for realized volatility calculation

@@ -27,6 +27,14 @@ from config import CONFIG
 from td3_agent import TD3Agent, device
 from hedging_env import HedgingEnv
 from benchmark import delta_hedging_simple
+from metrics import (
+    HedgingMetrics,
+    evaluate_agent_with_metrics,
+    evaluate_benchmark_with_metrics,
+    compare_metrics,
+    print_metrics_comparison,
+    plot_efficient_frontier
+)
 
 
 def black_scholes_price(S, K, T, r, sigma, option_type="call"):
@@ -437,7 +445,7 @@ def main():
     # =========================================================================
     # CONFIGURATION - Edit these values to change what to evaluate
     # =========================================================================
-    MODEL_PATH = "results/run_20251231_124230/td3_model.zip"
+    MODEL_PATH = "results/run_20251231_171949/td3_model.zip"
     N_EPISODES = 200
     DRIFT = -0.15  # Annual drift (negative for bearish market)
     SEED = 42
@@ -445,11 +453,11 @@ def main():
     # =========================================================================
     
     print(f"\n{'='*70}")
-    print(f"BEARISH MARKET EVALUATION")
+    print(f"BEARISH MARKET EVALUATION - COMPREHENSIVE METRICS")
     print(f"{'='*70}")
     print(f"Model: {MODEL_PATH}")
     print(f"Episodes: {N_EPISODES}")
-    print(f"Market drift: {DRIFT*100:.1f}% annual")
+    print(f"Market drift: {DRIFT*100:.1f}% annual (BEARISH)")
     print(f"{'='*70}\n")
     
     # Resolve model path (handle relative paths from workspace root)
@@ -491,6 +499,7 @@ def main():
                     return
     
     model_path_final = model_path
+    model_dir = os.path.dirname(model_path_final)
     
     # Load normalization stats from training (CRITICAL for correct evaluation)
     norm_stats = load_normalization_stats(model_path_final)
@@ -513,65 +522,130 @@ def main():
     agent.load(model_path_final)
     print(f"  ✓ Model loaded from {model_path_final}")
     
-    # Evaluate RL agent
-    print(f"\nEvaluating RL Agent on {len(bearish_envs)} bearish episodes...")
-    rl_stats = evaluate_agent_on_envs(agent, bearish_envs, verbose=True)
+    # =========================================================================
+    # COMPREHENSIVE METRICS EVALUATION
+    # =========================================================================
+    print(f"\n{'='*70}")
+    print(f"COMPREHENSIVE EVALUATION: {N_EPISODES} bearish episodes")
+    print(f"{'='*70}")
     
-    # Run benchmark
-    print(f"\nRunning Delta Hedging Benchmark...")
-    # Reset environments for benchmark
+    # Evaluate agent with comprehensive metrics
+    print(f"\nEvaluating RL Agent with comprehensive metrics...")
+    agent_metrics, agent_data = evaluate_agent_with_metrics(agent, bearish_envs, verbose=True)
+    
+    # Generate fresh environments for benchmark (to avoid state contamination)
     bearish_envs_bench = generate_bearish_test_envs(
         n_episodes=N_EPISODES,
         mu=DRIFT,
-        norm_stats=norm_stats,  # Use same norm_stats
+        norm_stats=norm_stats,
         seed=SEED,
         verbose=False
     )
-    benchmark_stats = run_benchmark_on_envs(bearish_envs_bench, verbose=True)
     
-    # Print results
+    # Evaluate benchmark with comprehensive metrics
+    print(f"\nEvaluating Delta Hedging Benchmark with comprehensive metrics...")
+    benchmark_metrics, bench_data = evaluate_benchmark_with_metrics(bearish_envs_bench, verbose=True)
+    
+    # Add comparison metrics
+    agent_metrics = compare_metrics(agent_metrics, benchmark_metrics)
+    
+    # Print comprehensive comparison
+    print_metrics_comparison(agent_metrics, benchmark_metrics, 
+                            title=f"BEARISH MARKET EVALUATION (μ={DRIFT*100:.0f}%)")
+    
+    # =========================================================================
+    # BEARISH-SPECIFIC ANALYSIS
+    # =========================================================================
     print(f"\n{'='*70}")
-    print(f"BEARISH MARKET RESULTS")
-    print(f"{'='*70}")
-    print(f"{'Metric':<30} {'RL Agent':<20} {'Delta Hedge':<20}")
-    print(f"{'-'*70}")
-    print(f"{'Mean Episode P&L':<30} {rl_stats['mean_episode_pnl']:<20.4f} {benchmark_stats['mean_episode_pnl']:<20.4f}")
-    print(f"{'Total P&L':<30} {rl_stats['total_cumulative_pnl']:<20.4f} {benchmark_stats['total_cumulative_pnl']:<20.4f}")
-    print(f"{'Mean Sharpe':<30} {rl_stats['mean_sharpe']:<20.4f} {benchmark_stats['mean_sharpe']:<20.4f}")
-    print(f"{'Mean Hedge Ratio':<30} {rl_stats['mean_action']:<20.4f} {benchmark_stats['mean_delta']:<20.4f}")
-    print(f"{'Action Std':<30} {rl_stats['std_action']:<20.4f} {'-':<20}")
+    print("BEARISH MARKET ANALYSIS:")
     print(f"{'='*70}")
     
-    pnl_diff = rl_stats['total_cumulative_pnl'] - benchmark_stats['total_cumulative_pnl']
-    if pnl_diff > 0:
-        print(f"\n✅ RL Agent OUTPERFORMS Delta Hedging by {pnl_diff:+.4f}")
-    else:
-        print(f"\n❌ Delta Hedging outperforms RL Agent by {-pnl_diff:.4f}")
-    
-    # Analysis
-    print(f"\n{'='*70}")
-    print("ANALYSIS:")
-    print(f"{'='*70}")
-    
-    if rl_stats['std_action'] < 0.01:
-        print(f"⚠ Agent uses constant action ({rl_stats['mean_action']:.3f}) - NOT dynamic hedging!")
-        if rl_stats['mean_action'] > 0.9:
+    # Dynamic hedging check
+    if agent_metrics.std_hedge_ratio < 0.01:
+        print(f"⚠ Agent uses constant action ({agent_metrics.mean_hedge_ratio:.3f}) - NOT dynamic hedging!")
+        if agent_metrics.mean_hedge_ratio > 0.9:
             print("   → Agent always fully hedges (1.0) regardless of market conditions")
             print("   → This is NAIVE behavior - doesn't adapt to bearish market")
-        elif rl_stats['mean_action'] < 0.1:
+        elif agent_metrics.mean_hedge_ratio < 0.1:
             print("   → Agent never hedges (0.0)")
     else:
-        print(f"✓ Agent uses variable actions (std={rl_stats['std_action']:.3f})")
-        print(f"   → Range: [{rl_stats['min_action']:.3f}, {rl_stats['max_action']:.3f}]")
+        print(f"✓ Agent uses variable actions (std={agent_metrics.std_hedge_ratio:.3f})")
+        print(f"   → Range: [{agent_metrics.min_hedge_ratio:.3f}, {agent_metrics.max_hedge_ratio:.3f}]")
     
-    # Plot
+    # Bearish market specific insights
+    print(f"\n--- Bearish Market Performance ---")
+    print(f"   In a bearish market (μ={DRIFT*100:.0f}%), prices fall on average")
+    
+    # Expected behavior in bearish market
+    # In bearish market, put hedging becomes more valuable
+    # A smart agent might increase hedging to protect against downside
+    if agent_metrics.mean_hedge_ratio > benchmark_metrics.mean_hedge_ratio:
+        print(f"   ✓ Agent hedges MORE than BS delta ({agent_metrics.mean_hedge_ratio:.3f} vs {benchmark_metrics.mean_hedge_ratio:.3f})")
+        print(f"     → May be adapting to bearish conditions by over-hedging")
+    else:
+        print(f"   Agent hedges LESS than BS delta ({agent_metrics.mean_hedge_ratio:.3f} vs {benchmark_metrics.mean_hedge_ratio:.3f})")
+    
+    # Risk in bearish markets
+    print(f"\n--- Risk Analysis (Bearish Context) ---")
+    if agent_metrics.max_drawdown < benchmark_metrics.max_drawdown:
+        drawdown_improvement = (benchmark_metrics.max_drawdown - agent_metrics.max_drawdown) / (benchmark_metrics.max_drawdown + 1e-8) * 100
+        print(f"   ✓ Agent has {drawdown_improvement:.1f}% smaller max drawdown")
+        print(f"     → Better protection in falling markets")
+    else:
+        print(f"   ⚠ Agent has worse drawdown protection than benchmark")
+    
+    # P&L analysis in bearish context
+    if agent_metrics.total_pnl > benchmark_metrics.total_pnl:
+        print(f"\n   ✓ Agent OUTPERFORMS benchmark even in bearish market!")
+        print(f"     → True dynamic hedging capability confirmed")
+    else:
+        print(f"\n   Agent underperforms benchmark in bearish market")
+        print(f"     → May have overfit to bullish bias in training data")
+    
+    # =========================================================================
+    # SAVE PLOTS
+    # =========================================================================
     output_path = OUTPUT_PATH
     if output_path is None:
-        # Save next to model
-        model_dir = os.path.dirname(model_path_final)
-        output_path = os.path.join(model_dir, 'bearish_evaluation.png')
+        output_path = os.path.join(model_dir, 'bearish_comprehensive_evaluation.png')
     
-    plot_comparison(rl_stats, benchmark_stats, save_path=output_path)
+    # Plot efficient frontier
+    frontier_path = os.path.join(model_dir, 'bearish_efficient_frontier.png')
+    plot_efficient_frontier(agent_metrics, benchmark_metrics, save_path=frontier_path, show=False)
+    
+    # Legacy plot for backward compatibility  
+    plot_comparison(
+        {'mean_episode_pnl': agent_metrics.mean_episode_pnl,
+         'std_episode_pnl': agent_metrics.std_episode_pnl,
+         'total_cumulative_pnl': agent_metrics.total_pnl,
+         'mean_sharpe': agent_metrics.sharpe_ratio,
+         'mean_action': agent_metrics.mean_hedge_ratio,
+         'std_action': agent_metrics.std_hedge_ratio,
+         'min_action': agent_metrics.min_hedge_ratio,
+         'max_action': agent_metrics.max_hedge_ratio,
+         'all_pnls': agent_metrics.all_episode_pnls,
+         'all_actions': agent_metrics.all_hedge_ratios},
+        {'mean_episode_pnl': benchmark_metrics.mean_episode_pnl,
+         'std_episode_pnl': benchmark_metrics.std_episode_pnl,
+         'total_cumulative_pnl': benchmark_metrics.total_pnl,
+         'mean_sharpe': benchmark_metrics.sharpe_ratio,
+         'mean_delta': benchmark_metrics.mean_hedge_ratio,
+         'all_pnls': benchmark_metrics.all_episode_pnls},
+        save_path=output_path
+    )
+    
+    # Save metrics to JSON
+    import json
+    metrics_path = os.path.join(model_dir, 'bearish_evaluation_metrics.json')
+    with open(metrics_path, 'w') as f:
+        json.dump({
+            'agent_metrics': agent_metrics.to_dict(),
+            'benchmark_metrics': benchmark_metrics.to_dict(),
+            'market_drift': DRIFT,
+            'n_episodes': N_EPISODES,
+            'seed': SEED
+        }, f, indent=2)
+    print(f"\nMetrics saved to: {metrics_path}")
 
 
 if __name__ == "__main__":

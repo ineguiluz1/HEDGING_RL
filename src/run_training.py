@@ -81,6 +81,15 @@ from trainer import (
     TrainingMetrics
 )
 from benchmark import run_benchmark_simple, delta_hedging_simple
+from metrics import (
+    HedgingMetrics,
+    evaluate_agent_with_metrics,
+    evaluate_benchmark_with_metrics,
+    compare_metrics,
+    print_metrics_comparison,
+    plot_efficient_frontier,
+    run_full_comparison
+)
 
 
 def setup_results_dir():
@@ -207,32 +216,69 @@ def run_full_training_pipeline(
         json.dump(metrics.to_dict(), f, indent=2, default=lambda x: float(x) if isinstance(x, np.floating) else str(x))
     
     # =========================================================================
-    # TEST EVALUATION
+    # TEST EVALUATION WITH COMPREHENSIVE METRICS
     # =========================================================================
     if test_env is None and len(test_envs) == 0:
         print("\n⚠ No test environment available - skipping evaluation")
         return {'agent': agent, 'metrics': metrics, 'results_dir': results_dir}
     
-    print(f"\nStep 3: Evaluating on Test Data...")
+    print(f"\nStep 3: Evaluating on Test Data with Comprehensive Metrics...")
     
     # Check if we're using windowed evaluation (same paradigm as training)
     if use_windowed_test and len(test_envs) > 1:
-        # Multi-episode evaluation (30-day windows)
-        print(f"\nEvaluating RL Agent on {len(test_envs)} test episodes ({CONFIG.get('test_episode_length', 30)} days each)...")
-        rl_stats = evaluate_agent_multi_episode(agent, test_envs, verbose=True)
+        # =====================================================================
+        # COMPREHENSIVE METRICS EVALUATION
+        # =====================================================================
+        print(f"\n{'='*70}")
+        print(f"COMPREHENSIVE EVALUATION: {len(test_envs)} episodes x {CONFIG.get('test_episode_length', 30)} days")
+        print(f"{'='*70}")
         
-        # For windowed test, we use per-episode statistics
-        rl_cumulative_pnl = rl_stats['total_cumulative_pnl']
-        rl_sharpe = rl_stats['mean_sharpe']
+        # Evaluate agent with new metrics system
+        print(f"\nStep 3a: Evaluating RL Agent...")
+        agent_metrics, agent_data = evaluate_agent_with_metrics(agent, test_envs, verbose=True)
         
-        # Run benchmark on all test windows
-        print(f"\nStep 4: Running Delta Hedging Benchmark on {len(test_envs)} test episodes...")
-        benchmark_results = run_benchmark_multi_episode(test_envs, verbose=True)
+        # Evaluate benchmark with new metrics system
+        print(f"\nStep 3b: Evaluating Delta Hedging Benchmark...")
+        benchmark_metrics, bench_data = evaluate_benchmark_with_metrics(test_envs, verbose=True)
         
-        benchmark_pnl = benchmark_results['total_cumulative_pnl']
-        benchmark_reward = benchmark_results['total_cumulative_reward']
-        benchmark_sharpe = benchmark_results['mean_sharpe']
-        benchmark_df = benchmark_results['aggregated_df']
+        # Add comparison metrics
+        agent_metrics = compare_metrics(agent_metrics, benchmark_metrics)
+        
+        # Print comprehensive comparison
+        print_metrics_comparison(agent_metrics, benchmark_metrics, 
+                                title="FINAL COMPARISON: RL Agent vs Delta Hedging")
+        
+        # Plot efficient frontier and other visualizations
+        if CONFIG.get("save_plots", True):
+            frontier_path = os.path.join(results_dir, "efficient_frontier.png")
+            plot_efficient_frontier(agent_metrics, benchmark_metrics, 
+                                   save_path=frontier_path, show=False)
+        
+        # Legacy variables for backward compatibility
+        rl_cumulative_pnl = agent_metrics.total_pnl
+        rl_sharpe = agent_metrics.sharpe_ratio
+        benchmark_pnl = benchmark_metrics.total_pnl
+        benchmark_sharpe = benchmark_metrics.sharpe_ratio
+        pnl_improvement = agent_metrics.pnl_improvement
+        
+        # For saving detailed results
+        rl_stats = {
+            'mean_episode_pnl': agent_metrics.mean_episode_pnl,
+            'std_episode_pnl': agent_metrics.std_episode_pnl,
+            'total_cumulative_pnl': agent_metrics.total_pnl,
+            'mean_sharpe': agent_metrics.sharpe_ratio,
+            'mean_action': agent_metrics.mean_hedge_ratio,
+            'std_action': agent_metrics.std_hedge_ratio,
+        }
+        benchmark_results = {
+            'mean_episode_pnl': benchmark_metrics.mean_episode_pnl,
+            'total_cumulative_pnl': benchmark_metrics.total_pnl,
+            'mean_sharpe': benchmark_metrics.sharpe_ratio,
+            'mean_delta': benchmark_metrics.mean_hedge_ratio,
+        }
+        
+        # For saving benchmark step data (use bench_data from metrics)
+        benchmark_df = bench_data if bench_data is not None else pd.DataFrame()
         
     else:
         # Single long episode evaluation (legacy mode)
@@ -253,56 +299,31 @@ def run_full_training_pipeline(
         benchmark_reward = benchmark_results['cumulative_reward']
         benchmark_sharpe = benchmark_results['sharpe_ratio']
         benchmark_df = benchmark_results['df']
-    
-    # =========================================================================
-    # COMPARISON SUMMARY
-    # =========================================================================
-    print(f"\n{'='*70}")
-    print(f"FINAL COMPARISON: RL Agent vs Delta Hedging")
-    if use_windowed_test:
-        print(f"  (Multi-Episode Evaluation: {len(test_envs)} x {CONFIG.get('test_episode_length', 30)} days)")
-    print(f"{'='*70}")
-    print(f"{'Metric':<30} {'RL Agent':<20} {'Delta Hedge':<20}")
-    print(f"{'-'*70}")
-    
-    if use_windowed_test:
-        print(f"{'Mean Episode P&L':<30} {rl_stats['mean_episode_pnl']:<20.4f} {benchmark_results['mean_episode_pnl']:<20.4f}")
-        print(f"{'Total P&L (all episodes)':<30} {rl_cumulative_pnl:<20.4f} {benchmark_pnl:<20.4f}")
-        print(f"{'Mean Sharpe Ratio':<30} {rl_sharpe:<20.4f} {benchmark_sharpe:<20.4f}")
-        print(f"{'Mean Hedge Ratio':<30} {rl_stats['mean_action']:<20.4f} {benchmark_results['mean_delta']:<20.4f}")
-    else:
+        
+        # Print legacy comparison
+        print(f"\n{'='*70}")
+        print(f"FINAL COMPARISON: RL Agent vs Delta Hedging")
+        print(f"{'='*70}")
+        print(f"{'Metric':<30} {'RL Agent':<20} {'Delta Hedge':<20}")
+        print(f"{'-'*70}")
         print(f"{'Total Reward':<30} {rl_stats['total_reward']:<20.4f} {benchmark_reward:<20.4f}")
         print(f"{'Cumulative P&L':<30} {rl_cumulative_pnl:<20.4f} {benchmark_pnl:<20.4f}")
         print(f"{'Sharpe Ratio':<30} {rl_sharpe:<20.4f} {benchmark_sharpe:<20.4f}")
         print(f"{'Mean Action (Hedge Ratio)':<30} {rl_stats['mean_action']:<20.4f} {benchmark_df['Delta'].mean():<20.4f}")
         print(f"{'Std Action':<30} {rl_stats['std_action']:<20.4f} {benchmark_df['Delta'].std():<20.4f}")
+        print(f"{'='*70}")
+        
+        pnl_improvement = rl_cumulative_pnl - benchmark_pnl
+        
+        # Set dummy metrics for non-windowed mode
+        agent_metrics = None
+        benchmark_metrics = None
     
-    print(f"{'='*70}")
-    
-    # Calculate improvements
-    pnl_improvement = rl_cumulative_pnl - benchmark_pnl
-    sharpe_improvement = rl_sharpe - benchmark_sharpe
-    
-    print(f"\nIMPROVEMENTS:")
-    print(f"  P&L Improvement: {pnl_improvement:+.4f} ({pnl_improvement/abs(benchmark_pnl + 1e-8)*100:+.2f}%)")
-    print(f"  Sharpe Improvement: {sharpe_improvement:+.4f}")
-    
-    if pnl_improvement > 0:
-        print(f"\n✅ RL Agent OUTPERFORMS Delta Hedging!")
-    else:
-        print(f"\n❌ Delta Hedging outperforms RL Agent")
-    
-    # Plot results
-    if CONFIG.get("save_plots", True):
-        if use_windowed_test:
-            # Multi-episode results plot (RL vs Benchmark comparison)
-            multi_ep_path = os.path.join(results_dir, "multi_episode_results.png")
-            plot_multi_episode_results(rl_stats, benchmark_results, save_path=multi_ep_path)
-        else:
-            # Single episode comparison plot
-            comparison_path = os.path.join(results_dir, "comparison_test.png")
-            plot_comparison(rl_stats, benchmark_df, test_env, save_path=comparison_path, 
-                           test_year="Test", output_dir=results_dir)
+    # Plot legacy results (for non-windowed mode)
+    if CONFIG.get("save_plots", True) and not use_windowed_test:
+        comparison_path = os.path.join(results_dir, "comparison_test.png")
+        plot_comparison(rl_stats, benchmark_df, test_env, save_path=comparison_path, 
+                       test_year="Test", output_dir=results_dir)
     
     # =========================================================================
     # SAVE RESULTS
@@ -317,8 +338,8 @@ def run_full_training_pipeline(
         'rl_agent': {
             'total_pnl': float(rl_cumulative_pnl),
             'sharpe_ratio': float(rl_sharpe),
-            'mean_action': float(rl_stats['mean_action']),
-            'std_action': float(rl_stats['std_action']),
+            'mean_action': float(rl_stats['mean_action'] if isinstance(rl_stats, dict) else rl_stats.get('mean_action', 0)),
+            'std_action': float(rl_stats['std_action'] if isinstance(rl_stats, dict) else rl_stats.get('std_action', 0)),
         },
         'benchmark': {
             'total_pnl': float(benchmark_pnl),
@@ -326,11 +347,18 @@ def run_full_training_pipeline(
         },
         'improvements': {
             'pnl': float(pnl_improvement),
-            'sharpe': float(sharpe_improvement)
         },
         'model_path': model_save_path,
         'results_dir': results_dir
     }
+    
+    # Add comprehensive metrics if available
+    if agent_metrics is not None:
+        results['rl_agent_metrics'] = agent_metrics.to_dict()
+        results['benchmark_metrics'] = benchmark_metrics.to_dict()
+        results['improvements']['tc_savings'] = float(agent_metrics.tc_savings)
+        results['improvements']['tc_savings_pct'] = float(agent_metrics.tc_savings_pct)
+        results['improvements']['information_ratio'] = float(agent_metrics.information_ratio)
     
     # Add additional per-episode stats if windowed
     if use_windowed_test:
@@ -355,8 +383,28 @@ def run_full_training_pipeline(
         
         # Benchmark step data
         benchmark_path = os.path.join(results_dir, "benchmark_steps.csv")
-        benchmark_df.to_csv(benchmark_path, index=False)
-        print(f"Benchmark step data saved to: {benchmark_path}")
+        if isinstance(benchmark_df, pd.DataFrame) and not benchmark_df.empty:
+            benchmark_df.to_csv(benchmark_path, index=False)
+            print(f"Benchmark step data saved to: {benchmark_path}")
+        elif isinstance(benchmark_df, list) and len(benchmark_df) > 0:
+            # Convert list of episode data to DataFrame
+            all_steps = []
+            for ep_idx, ep_data in enumerate(benchmark_df):
+                for step_idx, (pnl, hr, tc) in enumerate(zip(
+                    ep_data.get('step_pnls', []),
+                    ep_data.get('hedge_ratios', []),
+                    ep_data.get('transaction_costs', [])
+                )):
+                    all_steps.append({
+                        'episode': ep_idx,
+                        'step': step_idx,
+                        'step_pnl': pnl,
+                        'hedge_ratio': hr,
+                        'transaction_cost': tc
+                    })
+            if all_steps:
+                pd.DataFrame(all_steps).to_csv(benchmark_path, index=False)
+                print(f"Benchmark step data saved to: {benchmark_path}")
     
     return results
 

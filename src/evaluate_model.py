@@ -55,6 +55,14 @@ from data_loader import (
 from trainer import (
     evaluate_agent_multi_episode
 )
+from metrics import (
+    HedgingMetrics,
+    evaluate_agent_with_metrics,
+    evaluate_benchmark_with_metrics,
+    compare_metrics,
+    print_metrics_comparison,
+    plot_efficient_frontier
+)
 
 
 def create_test_environments_from_real_data(
@@ -292,7 +300,7 @@ def main():
     # =========================================================================
     # CONFIGURATION - Edit these values to change what to evaluate
     # =========================================================================
-    MODEL_PATH = "results/run_20251231_124230/td3_model.zip"
+    MODEL_PATH = "results/run_20251231_171949/td3_model.zip"
     START_YEAR = 2004
     END_YEAR = 2025
     EPISODE_LENGTH = 30  # Days per episode (same as training)
@@ -304,7 +312,7 @@ def main():
     set_all_seeds(seed)
     
     print(f"\n{'='*70}")
-    print(f"REAL S&P 500 DATA EVALUATION")
+    print(f"REAL S&P 500 DATA EVALUATION - COMPREHENSIVE METRICS")
     print(f"{'='*70}")
     print(f"Model: {MODEL_PATH}")
     print(f"Test period: {START_YEAR}-{END_YEAR}")
@@ -351,6 +359,7 @@ def main():
                     return
     
     model_path_final = model_path
+    model_dir = os.path.dirname(model_path_final)
     
     # Load normalization stats from training (CRITICAL for correct evaluation)
     norm_stats = load_normalization_stats(model_path_final)
@@ -373,57 +382,124 @@ def main():
     agent.load(model_path_final)
     print(f"  ✓ Model loaded from {model_path_final}")
     
-    # Evaluate RL agent
-    print(f"\nEvaluating RL Agent on {len(test_envs)} test episodes...")
-    rl_stats = evaluate_agent_multi_episode(agent, test_envs, verbose=True)
-    
-    # Run benchmark
-    print(f"\nRunning Delta Hedging Benchmark...")
-    benchmark_stats = run_benchmark_on_real_data_multi_episode(test_envs, verbose=True)
-    
-    # Print results
+    # =========================================================================
+    # COMPREHENSIVE METRICS EVALUATION
+    # =========================================================================
     print(f"\n{'='*70}")
-    print(f"REAL S&P 500 RESULTS")
-    print(f"{'='*70}")
-    print(f"{'Metric':<30} {'RL Agent':<20} {'Delta Hedge':<20}")
-    print(f"{'-'*70}")
-    print(f"{'Mean Episode P&L':<30} {rl_stats['mean_cumulative_pnl']:<20.4f} {benchmark_stats['mean_episode_pnl']:<20.4f}")
-    print(f"{'Total P&L':<30} {rl_stats['total_cumulative_pnl']:<20.4f} {benchmark_stats['total_cumulative_pnl']:<20.4f}")
-    print(f"{'Mean Sharpe':<30} {rl_stats['mean_sharpe']:<20.4f} {benchmark_stats['mean_sharpe']:<20.4f}")
-    print(f"{'Mean Hedge Ratio':<30} {rl_stats['mean_action']:<20.4f} {benchmark_stats['mean_delta']:<20.4f}")
-    print(f"{'Action Std':<30} {rl_stats['std_action']:<20.4f} {'-':<20}")
+    print(f"COMPREHENSIVE EVALUATION: {len(test_envs)} episodes x {EPISODE_LENGTH} days")
     print(f"{'='*70}")
     
-    pnl_diff = rl_stats['total_cumulative_pnl'] - benchmark_stats['total_cumulative_pnl']
-    if pnl_diff > 0:
-        print(f"\n✅ RL Agent OUTPERFORMS Delta Hedging by {pnl_diff:+.4f}")
-    else:
-        print(f"\n❌ Delta Hedging outperforms RL Agent by {-pnl_diff:.4f}")
+    # Evaluate agent with comprehensive metrics
+    print(f"\nEvaluating RL Agent with comprehensive metrics...")
+    agent_metrics, agent_data = evaluate_agent_with_metrics(agent, test_envs, verbose=True)
     
-    # Analysis
+    # Evaluate benchmark with comprehensive metrics
+    print(f"\nEvaluating Delta Hedging Benchmark with comprehensive metrics...")
+    benchmark_metrics, bench_data = evaluate_benchmark_with_metrics(test_envs, verbose=True)
+    
+    # Add comparison metrics
+    agent_metrics = compare_metrics(agent_metrics, benchmark_metrics)
+    
+    # Print comprehensive comparison
+    print_metrics_comparison(agent_metrics, benchmark_metrics, 
+                            title="REAL S&P 500 EVALUATION RESULTS")
+    
+    # =========================================================================
+    # ANALYSIS
+    # =========================================================================
     print(f"\n{'='*70}")
-    print("ANALYSIS:")
+    print("DETAILED ANALYSIS:")
     print(f"{'='*70}")
     
-    if rl_stats['std_action'] < 0.01:
-        print(f"⚠ Agent uses constant action ({rl_stats['mean_action']:.3f}) - NOT dynamic hedging!")
-        if rl_stats['mean_action'] > 0.9:
+    # Dynamic hedging check
+    if agent_metrics.std_hedge_ratio < 0.01:
+        print(f"⚠ Agent uses constant action ({agent_metrics.mean_hedge_ratio:.3f}) - NOT dynamic hedging!")
+        if agent_metrics.mean_hedge_ratio > 0.9:
             print("   → Agent always fully hedges (1.0)")
             print("   → May have learned to exploit bullish bias in S&P 500 data")
-        elif rl_stats['mean_action'] < 0.1:
+        elif agent_metrics.mean_hedge_ratio < 0.1:
             print("   → Agent never hedges (0.0)")
     else:
-        print(f"✓ Agent uses variable actions (std={rl_stats['std_action']:.3f})")
-        print(f"   → Range: [{rl_stats.get('min_action', min(rl_stats['all_actions'])):.3f}, {rl_stats.get('max_action', max(rl_stats['all_actions'])):.3f}]")
+        print(f"✓ Agent uses variable actions (std={agent_metrics.std_hedge_ratio:.3f})")
+        print(f"   → Range: [{agent_metrics.min_hedge_ratio:.3f}, {agent_metrics.max_hedge_ratio:.3f}]")
     
-    # Plot
+    # Cost efficiency analysis
+    print(f"\n--- Cost Efficiency Analysis ---")
+    if agent_metrics.tc_savings > 0:
+        print(f"✓ Agent saves {agent_metrics.tc_savings:.4f} in transaction costs ({agent_metrics.tc_savings_pct:.1f}%)")
+    else:
+        print(f"⚠ Agent incurs {-agent_metrics.tc_savings:.4f} MORE in transaction costs ({-agent_metrics.tc_savings_pct:.1f}%)")
+    
+    # Trading intensity
+    turnover_ratio = agent_metrics.total_turnover / (benchmark_metrics.total_turnover + 1e-8)
+    print(f"   Turnover ratio: {turnover_ratio:.2f}x benchmark")
+    
+    # Risk analysis
+    print(f"\n--- Risk Analysis ---")
+    variance_improvement = (benchmark_metrics.pnl_variance - agent_metrics.pnl_variance) / (benchmark_metrics.pnl_variance + 1e-8) * 100
+    print(f"   P&L Variance change: {variance_improvement:+.1f}%")
+    
+    drawdown_improvement = (benchmark_metrics.max_drawdown - agent_metrics.max_drawdown) / (benchmark_metrics.max_drawdown + 1e-8) * 100
+    print(f"   Max Drawdown change: {drawdown_improvement:+.1f}%")
+    
+    # Information Ratio interpretation
+    print(f"\n--- Risk-Adjusted Analysis ---")
+    print(f"   Information Ratio: {agent_metrics.information_ratio:.4f}")
+    if agent_metrics.information_ratio > 0.5:
+        print("   → Strong outperformance on risk-adjusted basis")
+    elif agent_metrics.information_ratio > 0:
+        print("   → Positive but modest risk-adjusted outperformance")
+    else:
+        print("   → Benchmark has better risk-adjusted returns")
+    
+    # =========================================================================
+    # SAVE PLOTS
+    # =========================================================================
     output_path = OUTPUT_PATH
     if output_path is None:
-        # Save next to model
-        model_dir = os.path.dirname(model_path_final)
-        output_path = os.path.join(model_dir, 'real_data_evaluation.png')
+        output_path = os.path.join(model_dir, 'comprehensive_evaluation.png')
     
-    plot_real_data_comparison(rl_stats, benchmark_stats, save_path=output_path)
+    # Plot efficient frontier and comparison
+    frontier_path = os.path.join(model_dir, 'efficient_frontier.png')
+    plot_efficient_frontier(agent_metrics, benchmark_metrics, save_path=frontier_path, show=False)
+    
+    # Legacy plot for backward compatibility
+    # Convert metrics to old format for legacy plotting function
+    rl_stats_legacy = {
+        'mean_cumulative_pnl': agent_metrics.mean_episode_pnl,
+        'std_cumulative_pnl': agent_metrics.std_episode_pnl,
+        'total_cumulative_pnl': agent_metrics.total_pnl,
+        'mean_sharpe': agent_metrics.sharpe_ratio,
+        'mean_action': agent_metrics.mean_hedge_ratio,
+        'std_action': agent_metrics.std_hedge_ratio,
+        'min_action': agent_metrics.min_hedge_ratio,
+        'max_action': agent_metrics.max_hedge_ratio,
+        'all_cumulative_pnls': agent_metrics.all_episode_pnls,
+        'all_actions': agent_metrics.all_hedge_ratios,
+    }
+    benchmark_stats_legacy = {
+        'mean_episode_pnl': benchmark_metrics.mean_episode_pnl,
+        'total_cumulative_pnl': benchmark_metrics.total_pnl,
+        'mean_sharpe': benchmark_metrics.sharpe_ratio,
+        'mean_delta': benchmark_metrics.mean_hedge_ratio,
+        'std_episode_pnl': benchmark_metrics.std_episode_pnl,
+        'all_pnls': benchmark_metrics.all_episode_pnls,
+    }
+    
+    plot_real_data_comparison(rl_stats_legacy, benchmark_stats_legacy, save_path=output_path)
+    
+    # Save metrics to JSON
+    metrics_path = os.path.join(model_dir, 'evaluation_metrics.json')
+    import json
+    with open(metrics_path, 'w') as f:
+        json.dump({
+            'agent_metrics': agent_metrics.to_dict(),
+            'benchmark_metrics': benchmark_metrics.to_dict(),
+            'test_period': f"{START_YEAR}-{END_YEAR}",
+            'episode_length': EPISODE_LENGTH,
+            'n_episodes': len(test_envs)
+        }, f, indent=2)
+    print(f"\nMetrics saved to: {metrics_path}")
 
 
 if __name__ == "__main__":
