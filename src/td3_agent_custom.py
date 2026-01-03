@@ -174,17 +174,20 @@ class Critic(nn.Module):
 class OUNoise:
     """Ornstein-Uhlenbeck Process for exploration noise"""
     
-    def __init__(self, action_dim, theta=None, sigma=None, mu=0.0):
+    def __init__(self, action_dim, theta=None, sigma=None, mu=0.0, seed=None):
         if theta is None:
             theta = CONFIG["ou_theta"]
         if sigma is None:
             sigma = CONFIG["ou_sigma"]
+        if seed is None:
+            seed = CONFIG.get("seed", 42)
             
         self.action_dim = action_dim
         self.theta = theta
         self.sigma = sigma
         self.mu = mu
         self.state = np.ones(action_dim) * mu
+        self.rng = np.random.default_rng(seed)
         
     def reset(self):
         """Reset noise state"""
@@ -192,7 +195,7 @@ class OUNoise:
     
     def sample(self):
         """Generate noise sample"""
-        dx = self.theta * (self.mu - self.state) + self.sigma * np.random.randn(self.action_dim)
+        dx = self.theta * (self.mu - self.state) + self.sigma * self.rng.standard_normal(self.action_dim)
         self.state += dx
         return self.state
 

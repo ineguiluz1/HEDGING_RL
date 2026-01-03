@@ -68,7 +68,7 @@ def generate_gbm_path(S0, mu, sigma, T, steps, rng=None):
     return path
 
 
-def calculate_rolling_volatility(prices, window=20, annualization=252):
+def calculate_rolling_volatility(prices, window=20, annualization=252, rng=None):
     """
     Calculate rolling realized volatility.
     
@@ -76,6 +76,7 @@ def calculate_rolling_volatility(prices, window=20, annualization=252):
         prices: Price series
         window: Rolling window size
         annualization: Annualization factor
+        rng: Random number generator for reproducibility (optional)
     
     Returns:
         np.ndarray: Realized volatility series
@@ -87,11 +88,21 @@ def calculate_rolling_volatility(prices, window=20, annualization=252):
     
     # Fill initial NaN values with random volatility
     mask_nan = np.isnan(vol)
-    vol[mask_nan] = np.random.uniform(
-        CONFIG.get("initial_vol_min", 0.02),
-        CONFIG.get("initial_vol_max", 0.10),
-        size=mask_nan.sum()
-    )
+    if mask_nan.sum() > 0:
+        if rng is not None:
+            vol[mask_nan] = rng.uniform(
+                CONFIG.get("initial_vol_min", 0.02),
+                CONFIG.get("initial_vol_max", 0.10),
+                size=mask_nan.sum()
+            )
+        else:
+            # Use seeded RNG if none provided for reproducibility
+            fallback_rng = np.random.default_rng(CONFIG.get("seed", 101))
+            vol[mask_nan] = fallback_rng.uniform(
+                CONFIG.get("initial_vol_min", 0.02),
+                CONFIG.get("initial_vol_max", 0.10),
+                size=mask_nan.sum()
+            )
     
     return vol
 
@@ -149,8 +160,8 @@ def generate_mc_hedging_trajectory(
     # Generate timestamps (business days)
     timestamps = pd.date_range(start=start_date, periods=steps+1, freq='B')
     
-    # Calculate realized volatility
-    realized_vol = calculate_rolling_volatility(S, window=vol_window, annualization=252)
+    # Calculate realized volatility (pass rng for reproducibility)
+    realized_vol = calculate_rolling_volatility(S, window=vol_window, annualization=252, rng=rng)
     
     # Fixed strike price: ATM at inception (t=0) with small noise
     # This simulates selling an option at the start of the episode

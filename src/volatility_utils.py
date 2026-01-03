@@ -33,12 +33,13 @@ def fill_initial_volatility(realized_vol, initial_vol_value=None):
     filled_vol = realized_vol.copy()
     
     if pd.isna(filled_vol.iloc[0]) and CONFIG.get("use_random_initial_vol", True):
-        if CONFIG.get("seed", None) is not None:
-            np.random.seed(CONFIG["seed"])
+        # Use seeded RNG for reproducibility
+        seed = CONFIG.get("seed", 101)
+        rng = np.random.default_rng(seed)
         
         vol_min = CONFIG.get("initial_vol_min", 0.05)
         vol_max = CONFIG.get("initial_vol_max", 0.40)
-        random_initial_vol = np.random.uniform(vol_min, vol_max)
+        random_initial_vol = rng.uniform(vol_min, vol_max)
         filled_vol.iloc[0] = random_initial_vol
         
         # Removed verbose print to reduce log spam

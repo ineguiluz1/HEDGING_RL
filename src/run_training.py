@@ -28,6 +28,42 @@ from datetime import datetime
 import json
 import torch
 
+# ============================================================================
+# CRITICAL: Set seeds BEFORE importing any other modules
+# This ensures reproducibility from the very start
+# ============================================================================
+def _early_seed_init():
+    """Set seeds before any other imports to ensure reproducibility."""
+    # Read seed from config file directly to avoid circular imports
+    default_seed = 1234
+    try:
+        # Try to read seed from config
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.py')
+        with open(config_path, 'r') as f:
+            for line in f:
+                if '"seed":' in line:
+                    # Extract seed value
+                    seed_str = line.split(':')[1].strip().rstrip(',')
+                    default_seed = int(seed_str)
+                    break
+    except:
+        pass
+    
+    # Set all seeds
+    random.seed(default_seed)
+    np.random.seed(default_seed)
+    torch.manual_seed(default_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(default_seed)
+        torch.cuda.manual_seed_all(default_seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    os.environ['PYTHONHASHSEED'] = str(default_seed)
+    return default_seed
+
+_INIT_SEED = _early_seed_init()
+# ============================================================================
+
 # Add src to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -416,6 +452,11 @@ def train_multi_env(train_envs, verbose=True):
     No validation set - test directly on real data.
     To train more, increase mc_train_trajectories in config.
     
+    Supports:
+    - Curriculum learning (neutral first, then mixed)
+    - Volatility curriculum (low → medium → high)
+    - Early stopping per curriculum phase
+    
     Args:
         train_envs: List of training environments
         verbose: Print progress
@@ -434,64 +475,221 @@ def train_multi_env(train_envs, verbose=True):
     agent = TD3Agent(state_dim, action_dim)
     agent.set_env(train_envs[0])  # Initialize model with first environment
     
+    # =========================================================================
+    # PRE-TRAINING: Initialize from delta hedging (if enabled)
+    # =========================================================================
+    if CONFIG.get('use_pretraining', False):
+        from pretrain_from_delta import pretrain_agent_from_delta, get_pretraining_config
+        
+        pretrain_config = get_pretraining_config()
+        agent = pretrain_agent_from_delta(
+            agent,
+            train_envs,
+            epochs=pretrain_config['epochs'],
+            batch_size=pretrain_config['batch_size'],
+            learning_rate=pretrain_config['learning_rate'],
+            max_samples=pretrain_config['max_samples'],
+            verbose=verbose
+        )
+    
     # Metrics tracking
     metrics = TrainingMetrics()
     
     total_steps = 0
     n_trajectories = len(train_envs)
     
+    # =========================================================================
+    # CURRICULUM LEARNING SETUP
+    # =========================================================================
+    use_curriculum = CONFIG.get('use_curriculum_learning', False)
+    use_vol_curriculum = CONFIG.get('use_volatility_curriculum', False)
+    
+    # Define curriculum phases based on how trajectories were generated
+    curriculum_phases = []
+    
+    if use_curriculum or use_vol_curriculum:
+        # Calculate phase boundaries
+        neutral_ratio = CONFIG.get('curriculum_neutral_ratio', 0.4)
+        vol_phases = CONFIG.get('vol_curriculum_phases', {})
+        
+        if use_vol_curriculum and vol_phases:
+            # Volatility curriculum has priority
+            low_ratio = vol_phases.get('low', {}).get('ratio', 0.3)
+            medium_ratio = vol_phases.get('medium', {}).get('ratio', 0.4)
+            high_ratio = vol_phases.get('high', {}).get('ratio', 0.3)
+            
+            low_end = int(n_trajectories * low_ratio)
+            medium_end = int(n_trajectories * (low_ratio + medium_ratio))
+            
+            curriculum_phases = [
+                {'name': 'Low Volatility', 'start': 0, 'end': low_end},
+                {'name': 'Medium Volatility', 'start': low_end, 'end': medium_end},
+                {'name': 'High Volatility', 'start': medium_end, 'end': n_trajectories}
+            ]
+        elif use_curriculum:
+            # Drift curriculum
+            neutral_end = int(n_trajectories * neutral_ratio)
+            curriculum_phases = [
+                {'name': 'Neutral Drift', 'start': 0, 'end': neutral_end},
+                {'name': 'Mixed Drift', 'start': neutral_end, 'end': n_trajectories}
+            ]
+    
+    if not curriculum_phases:
+        # No curriculum - single phase
+        curriculum_phases = [{'name': 'Full Training', 'start': 0, 'end': n_trajectories}]
+    
     if verbose:
         print(f"\n{'='*60}")
-        print(f"TRAINING ON {n_trajectories} TRAJECTORIES (single pass)")
+        print(f"TRAINING ON {n_trajectories} TRAJECTORIES")
         print(f"{'='*60}")
+        print(f"  Curriculum phases: {len(curriculum_phases)}")
+        for phase in curriculum_phases:
+            print(f"    - {phase['name']}: trajectories {phase['start']}-{phase['end']} ({phase['end']-phase['start']} total)")
+    
+    # =========================================================================
+    # EARLY STOPPING SETUP
+    # =========================================================================
+    use_early_stopping = CONFIG.get('use_early_stopping', False)
+    es_patience = CONFIG.get('early_stopping_patience', 500)
+    es_min_delta = CONFIG.get('early_stopping_min_delta', 0.001)
+    es_window = CONFIG.get('early_stopping_window', 100)
+    es_per_phase = CONFIG.get('early_stopping_per_curriculum_phase', True)
+    es_min_episodes = CONFIG.get('early_stopping_min_episodes_per_phase', 200)
+    
+    if use_early_stopping and verbose:
+        print(f"\n  Early Stopping enabled:")
+        print(f"    Patience: {es_patience} episodes")
+        print(f"    Min improvement: {es_min_delta}")
+        print(f"    Moving average window: {es_window}")
+        print(f"    Per curriculum phase: {es_per_phase}")
     
     # Shuffle environments with dedicated RNG for reproducibility
     shuffle_seed = CONFIG.get("seed", 101)
     shuffle_rng = np.random.default_rng(shuffle_seed)
-    env_indices = shuffle_rng.permutation(n_trajectories)
     
     all_rewards = []
     all_losses = []
+    total_episodes_trained = 0
+    early_stopped_phases = []
     
-    for i, env_idx in enumerate(env_indices):
-        env = train_envs[env_idx]
-        
-        # Update agent's environment reference
-        agent.set_env(env)
-        
-        # Train one episode on this environment
-        episode_reward, episode_steps, episode_losses = train_single_episode(
-            agent, env, total_steps
-        )
-        
-        total_steps += episode_steps
-        all_rewards.append(episode_reward)
-        all_losses.extend(episode_losses)
-        
-        # Record metrics
-        loss = episode_losses[-1] if episode_losses else 0.0
-        metrics.add_episode(
-            reward=episode_reward,
-            pnl=0,  # PnL calculated separately
-            length=episode_steps,
-            actor_loss=0,
-            critic_loss=loss,
-            noise=agent.current_noise if hasattr(agent, 'current_noise') else 0.1
-        )
+    # =========================================================================
+    # TRAINING LOOP WITH CURRICULUM PHASES
+    # =========================================================================
+    for phase_idx, phase in enumerate(curriculum_phases):
+        phase_name = phase['name']
+        phase_start = phase['start']
+        phase_end = phase['end']
+        phase_size = phase_end - phase_start
         
         if verbose:
-            progress = (i + 1) / n_trajectories * 100
-            print(f"  [{progress:5.1f}%] Trajectory {env_idx + 1}: Reward={episode_reward:.2f}, Steps={episode_steps}")
+            print(f"\n{'-'*60}")
+            print(f"PHASE {phase_idx + 1}/{len(curriculum_phases)}: {phase_name}")
+            print(f"  Trajectories: {phase_start} to {phase_end} ({phase_size} total)")
+            print(f"{'-'*60}")
+        
+        # Get indices for this phase and shuffle them
+        phase_indices = list(range(phase_start, phase_end))
+        shuffle_rng.shuffle(phase_indices)
+        
+        # Early stopping state for this phase
+        phase_rewards = []
+        best_avg_reward = float('-inf')
+        episodes_without_improvement = 0
+        phase_early_stopped = False
+        
+        for i, env_idx in enumerate(phase_indices):
+            env = train_envs[env_idx]
+            
+            # Update agent's environment reference
+            agent.set_env(env)
+            
+            # Train one episode on this environment
+            episode_reward, episode_steps, episode_losses = train_single_episode(
+                agent, env, total_steps
+            )
+            
+            total_steps += episode_steps
+            total_episodes_trained += 1
+            all_rewards.append(episode_reward)
+            all_losses.extend(episode_losses)
+            phase_rewards.append(episode_reward)
+            
+            # Record metrics
+            loss = episode_losses[-1] if episode_losses else 0.0
+            metrics.add_episode(
+                reward=episode_reward,
+                pnl=0,  # PnL calculated separately
+                length=episode_steps,
+                actor_loss=0,
+                critic_loss=loss,
+                noise=agent.current_noise if hasattr(agent, 'current_noise') else 0.1
+            )
+            
+            # =========================================================================
+            # EARLY STOPPING CHECK
+            # =========================================================================
+            if use_early_stopping and len(phase_rewards) >= es_window:
+                current_avg = np.mean(phase_rewards[-es_window:])
+                
+                if current_avg > best_avg_reward + es_min_delta:
+                    best_avg_reward = current_avg
+                    episodes_without_improvement = 0
+                else:
+                    episodes_without_improvement += 1
+                
+                # Check if should stop this phase
+                if (es_per_phase and 
+                    len(phase_rewards) >= es_min_episodes and 
+                    episodes_without_improvement >= es_patience):
+                    
+                    phase_early_stopped = True
+                    early_stopped_phases.append(phase_name)
+                    
+                    if verbose:
+                        print(f"\n  ⚡ EARLY STOPPING in phase '{phase_name}'")
+                        print(f"     Episodes trained: {len(phase_rewards)}/{phase_size}")
+                        print(f"     Best avg reward: {best_avg_reward:.4f}")
+                        print(f"     No improvement for {es_patience} episodes")
+                    break
+            
+            # Progress logging
+            if verbose:
+                progress = (i + 1) / phase_size * 100
+                phase_avg = np.mean(phase_rewards[-min(100, len(phase_rewards)):])
+                
+                # Print every 100 episodes or at milestones
+                if (i + 1) % 100 == 0 or i == 0 or (i + 1) == phase_size:
+                    print(f"  [{progress:5.1f}%] Episode {i+1}/{phase_size}: "
+                          f"Reward={episode_reward:.2f}, Avg(100)={phase_avg:.2f}, "
+                          f"Steps={episode_steps}")
+        
+        # Phase summary
+        if verbose:
+            phase_avg_reward = np.mean(phase_rewards) if phase_rewards else 0
+            print(f"\n  Phase '{phase_name}' complete:")
+            print(f"    Episodes trained: {len(phase_rewards)}")
+            print(f"    Avg reward: {phase_avg_reward:.4f}")
+            if phase_early_stopped:
+                print(f"    Status: Early stopped (saved {phase_size - len(phase_rewards)} episodes)")
+            else:
+                print(f"    Status: Completed all episodes")
     
-    # Summary
-    avg_reward = np.mean(all_rewards)
+    # =========================================================================
+    # TRAINING SUMMARY
+    # =========================================================================
+    avg_reward = np.mean(all_rewards) if all_rewards else 0.0
     avg_loss = np.mean(all_losses) if all_losses else 0.0
     
     if verbose:
-        print(f"\n  Training Summary:")
-        print(f"    Total Trajectories: {n_trajectories}")
-        print(f"    Total Steps: {total_steps:,}")
-        print(f"    Avg Reward: {avg_reward:.4f}")
+        print(f"\n{'='*60}")
+        print(f"TRAINING COMPLETE")
+        print(f"{'='*60}")
+        print(f"  Total Trajectories Used: {total_episodes_trained}/{n_trajectories}")
+        print(f"  Total Steps: {total_steps:,}")
+        print(f"  Avg Reward: {avg_reward:.4f}")
+        if early_stopped_phases:
+            print(f"  Early stopped phases: {', '.join(early_stopped_phases)}")
+        print(f"{'='*60}")
     
     return agent, metrics
 
@@ -523,10 +721,19 @@ def train_single_episode(agent, env, global_step=0):
     
     warmup_steps = CONFIG.get("warmup_steps", 1000)
     
+    # Use seeded RNG for warmup random actions (reproducibility)
+    seed = CONFIG.get("seed", 101)
+    warmup_rng = np.random.default_rng(seed + global_step)
+    
     while not done:
         # Select action
         if global_step + steps < warmup_steps:
-            action = env.action_space.sample()
+            # Use seeded random actions during warmup for reproducibility
+            action = warmup_rng.uniform(
+                env.action_space.low, 
+                env.action_space.high, 
+                size=env.action_space.shape
+            ).astype(np.float32)
         else:
             action = agent.select_action(state, add_noise=True)
         

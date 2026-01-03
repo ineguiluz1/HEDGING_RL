@@ -9,9 +9,9 @@ CONFIG = {
     
     # Reward Function Configuration
     # Options: "delta_tracking" (PRIMARY), "variance_minimization", "cara_utility", "profit_seeking"
-    "reward_type": "delta_tracking",        # Track BS delta as primary objective
-    "delta_tracking_weight": 1.0,           # Weight for tracking error (main component)
-    "pnl_variance_weight": 0.1,             # Weight for P&L variance (secondary)
+    "reward_type": "variance_minimization",        # Track BS delta as primary objective
+    "delta_tracking_weight": 0.1,           # Weight for tracking error (main component)
+    "pnl_variance_weight": 2.0,             # Weight for P&L variance (secondary)
     "transaction_cost_weight": 1.0,         # Weight for transaction cost penalty (teaches cost of rebalancing)
     "cara_lambda": 1.0,                     # CARA utility risk parameter (only if reward_type="cara_utility")
     "risk_aversion": 0.01,                  # Only used if reward_type="profit_seeking"
@@ -56,7 +56,7 @@ CONFIG = {
     "num_epochs": 10,                   # Number of epochs for multi-year training
     "update_every": 1,                  # Training updates every N steps
     "warmup_steps": 5000,               # Random actions before training (5000 steps)
-    "seed": 101,                        # Random seed for reproducibility
+    "seed": 1234,                        # Random seed for reproducibility
     "training_report_interval": 1,      # Episodes between training progress reports
     
     # Network Architecture
@@ -66,15 +66,15 @@ CONFIG = {
     # TD3 Algorithm Parameters
     "tau": 0.001,                       # Soft update rate for target networks (0.1% per update)
     "gamma": 0.99,                      # Discount factor for future rewards
-    "policy_noise": 0.1,                # Standard deviation of target policy smoothing noise
+    "policy_noise": 0.05,                # Standard deviation of target policy smoothing noise
     "noise_clip": 0.2,                  # Clipping range for target policy noise
     "policy_freq": 2,                   # Frequency of policy updates (every N critic updates)
     
     # Optimization
     "actor_lr": 1e-4,                   # Learning rate for actor network (reduced from 3e-3)
     "critic_lr": 1e-4,                  # Learning rate for critic networks (reduced from 3e-3)
-    "batch_size": 256,                  # Batch size for experience replay
-    "replay_buffer_size": 100000,       # Maximum size of experience replay buffer
+    "batch_size": 512,                  # Batch size for experience replay
+    "replay_buffer_size": 200000,       # Maximum size of experience replay buffer
     
     # Exploration Strategy (Ornstein-Uhlenbeck Process)
     "initial_noise": 0.8,               # Starting exploration noise level (80% - VERY high for more variation)
@@ -103,7 +103,20 @@ CONFIG = {
     "mc_episode_length": 30,                       # Episode length in trading days (30 = option expiry simulation)
     "mc_steps_per_year": 252,                      # Trading days per year (for annualization calculations)
     "test_start_year": 2004,                       # Start year for test data (real data)
-    "test_end_year": 2025,                         # End year for test data (real data)
+    "test_end_year": 2025,                         # End year for test data (real data)    
+    # ENSEMBLE LEARNING: Train multiple models and average predictions
+    # This significantly reduces seed dependency and improves robustness
+    "use_ensemble": False,                          # Enable ensemble of multiple models
+    "ensemble_size": 5,                            # Number of models in ensemble (different seeds)
+    "ensemble_seeds": [42, 101, 123, 456, 789],   # Seeds for each ensemble member
+    
+    # PRE-TRAINING FROM EXPERT: Initialize network with delta hedging
+    # This significantly reduces seed dependency by starting from good policy
+    "use_pretraining": False,                       # Enable pre-training from delta hedging
+    "pretrain_epochs": 10,                         # Number of supervised learning epochs
+    "pretrain_batch_size": 256,                    # Batch size for pre-training
+    "pretrain_lr": 1e-3,                          # Learning rate for pre-training
+    "pretrain_max_samples": 10000,                 # Max expert demonstrations to collect
     
     # =============================================================================
     # CURRICULUM LEARNING CONFIGURATION
@@ -122,6 +135,18 @@ CONFIG = {
         "medium": {"ratio": 0.40, "vol_range": (0.15, 0.25)}, # 40% medium
         "high": {"ratio": 0.30, "vol_range": (0.25, 0.40)}    # 30% hard
     },
+    
+    # =============================================================================
+    # EARLY STOPPING CONFIGURATION
+    # =============================================================================
+    # Stop training early if no improvement is observed
+    "use_early_stopping": True,                    # Enable early stopping
+    "early_stopping_patience": 500,                # Episodes without improvement before stopping
+    "early_stopping_min_delta": 0.001,             # Minimum improvement to count as progress
+    "early_stopping_metric": "reward",             # Metric to monitor: "reward" or "loss"
+    "early_stopping_window": 100,                  # Window size for computing moving average
+    "early_stopping_per_curriculum_phase": True,   # Apply early stopping per curriculum phase
+    "early_stopping_min_episodes_per_phase": 200,  # Minimum episodes per phase before early stopping
     
     # Mixed Market Conditions Training (used after curriculum phase)
     "mc_use_mixed_drift": True,                    # Use mixed bullish/bearish/neutral trajectories

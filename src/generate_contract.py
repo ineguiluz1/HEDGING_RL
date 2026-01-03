@@ -110,6 +110,11 @@ def generate_historical_hedging_data(
     
     print(f"Generando contratos para {n_steps} pasos de tiempo...")
 
+    # Use seeded RNG for reproducibility
+    from config import CONFIG
+    seed = CONFIG.get("seed", 101)
+    rng = np.random.default_rng(seed)
+
     # --- Construcción de Variables ---
     
     # 1. Volatilidad Realizada (sigma)
@@ -124,16 +129,16 @@ def generate_historical_hedging_data(
     
     # Rellenar NaNs iniciales (Paper sugiere valores aleatorios [0.02, 0.10]) [cite: 390]
     mask_nan = np.isnan(realized_vol)
-    realized_vol[mask_nan] = np.random.uniform(0.02, 0.10, size=mask_nan.sum())
+    realized_vol[mask_nan] = rng.uniform(0.02, 0.10, size=mask_nan.sum())
 
     # 2. Strike (K) -> Dinámico para ser siempre ATM (Moneyness ~ 1) [cite: 395]
     # Simulamos pequeñas variaciones de mercado donde no encontramos el strike perfecto
-    noise_moneyness = np.random.normal(0, 0.005, n_steps) # Ruido pequeño
+    noise_moneyness = rng.normal(0, 0.005, n_steps) # Ruido pequeño
     K = S * (1 + noise_moneyness)
 
     # 3. Time to Maturity (tau) -> Dinámico para ser siempre ~30 días [cite: 395]
     target_maturity_years = 30 / 365.0
-    noise_maturity = np.random.normal(0, 0.001, n_steps)
+    noise_maturity = rng.normal(0, 0.001, n_steps)
     tau = np.clip(target_maturity_years + noise_maturity, 0.01, 0.2)
 
     # 4. Precio de la Opción (C) - Teórico basado en S real

@@ -67,15 +67,19 @@ class HedgingMetrics:
     min_hedge_ratio: float = 0.0
     max_hedge_ratio: float = 0.0
     
-    # Risk Metrics
-    pnl_variance: float = 0.0
-    pnl_std: float = 0.0
-    max_drawdown: float = 0.0
-    max_episode_loss: float = 0.0
+    # Risk Metrics (HEDGING EFFICIENCY - Priority #1)
+    pnl_variance: float = 0.0           # THE KEY METRIC: Lower = better hedge
+    pnl_std: float = 0.0                # Standard deviation of step P&L
+    max_drawdown: float = 0.0           # Worst cumulative loss
+    max_episode_loss: float = 0.0       # Worst single episode
+    tail_risk_5pct: float = 0.0         # 5th percentile of step P&L (VaR-like)
+    tail_risk_1pct: float = 0.0         # 1st percentile of step P&L (extreme losses)
+    positive_pnl_ratio: float = 0.0     # % of steps with positive P&L
     
     # Risk-Adjusted Metrics
     sharpe_ratio: float = 0.0
     sortino_ratio: float = 0.0
+    calmar_ratio: float = 0.0           # Return / Max Drawdown
     
     # Comparison Metrics (vs Benchmark)
     pnl_improvement: float = 0.0
@@ -83,6 +87,10 @@ class HedgingMetrics:
     tc_savings: float = 0.0
     tc_savings_pct: float = 0.0
     information_ratio: float = 0.0
+    variance_reduction: float = 0.0      # How much lower is variance vs benchmark
+    variance_reduction_pct: float = 0.0  # % reduction in variance
+    drawdown_improvement: float = 0.0    # Reduction in max drawdown
+    drawdown_improvement_pct: float = 0.0
     
     # Raw data for plotting
     all_episode_pnls: List[float] = field(default_factory=list)
@@ -118,13 +126,21 @@ class HedgingMetrics:
             'pnl_std': self.pnl_std,
             'max_drawdown': self.max_drawdown,
             'max_episode_loss': self.max_episode_loss,
+            'tail_risk_5pct': self.tail_risk_5pct,
+            'tail_risk_1pct': self.tail_risk_1pct,
+            'positive_pnl_ratio': self.positive_pnl_ratio,
             'sharpe_ratio': self.sharpe_ratio,
             'sortino_ratio': self.sortino_ratio,
+            'calmar_ratio': self.calmar_ratio,
             'pnl_improvement': self.pnl_improvement,
             'pnl_improvement_pct': self.pnl_improvement_pct,
             'tc_savings': self.tc_savings,
             'tc_savings_pct': self.tc_savings_pct,
             'information_ratio': self.information_ratio,
+            'variance_reduction': self.variance_reduction,
+            'variance_reduction_pct': self.variance_reduction_pct,
+            'drawdown_improvement': self.drawdown_improvement,
+            'drawdown_improvement_pct': self.drawdown_improvement_pct,
         }
 
 
@@ -328,11 +344,18 @@ def compute_metrics_from_episodes(
         metrics.min_hedge_ratio = float(np.min(all_hedge_ratios))
         metrics.max_hedge_ratio = float(np.max(all_hedge_ratios))
     
-    # === Risk Metrics ===
+    # === Risk Metrics (HEDGING EFFICIENCY - Priority #1) ===
     if len(all_step_pnls) > 0:
         metrics.pnl_variance = float(np.var(all_step_pnls))
         metrics.pnl_std = float(np.std(all_step_pnls))
         metrics.max_drawdown = calculate_max_drawdown(all_step_pnls)
+        
+        # Tail risk metrics (VaR-like)
+        metrics.tail_risk_5pct = float(np.percentile(all_step_pnls, 5))
+        metrics.tail_risk_1pct = float(np.percentile(all_step_pnls, 1))
+        
+        # Ratio of positive P&L steps
+        metrics.positive_pnl_ratio = float(np.mean(all_step_pnls > 0) * 100)
     
     if len(episode_pnls) > 0:
         metrics.max_episode_loss = float(np.min(episode_pnls))
@@ -340,6 +363,10 @@ def compute_metrics_from_episodes(
     # === Risk-Adjusted Metrics ===
     metrics.sharpe_ratio = calculate_sharpe_ratio(all_step_pnls)
     metrics.sortino_ratio = calculate_sortino_ratio(all_step_pnls)
+    
+    # Calmar Ratio: Return / Max Drawdown
+    if metrics.max_drawdown > 1e-8:
+        metrics.calmar_ratio = float(metrics.total_pnl / metrics.max_drawdown)
     
     return metrics
 
@@ -369,6 +396,18 @@ def compare_metrics(
     
     if benchmark_metrics.total_transaction_costs > 1e-8:
         agent_metrics.tc_savings_pct = (agent_metrics.tc_savings / benchmark_metrics.total_transaction_costs) * 100
+    
+    # Variance Reduction (CRITICAL for hedging efficiency)
+    agent_metrics.variance_reduction = benchmark_metrics.pnl_variance - agent_metrics.pnl_variance
+    
+    if benchmark_metrics.pnl_variance > 1e-10:
+        agent_metrics.variance_reduction_pct = (agent_metrics.variance_reduction / benchmark_metrics.pnl_variance) * 100
+    
+    # Max Drawdown Improvement
+    agent_metrics.drawdown_improvement = benchmark_metrics.max_drawdown - agent_metrics.max_drawdown
+    
+    if benchmark_metrics.max_drawdown > 1e-8:
+        agent_metrics.drawdown_improvement_pct = (agent_metrics.drawdown_improvement / benchmark_metrics.max_drawdown) * 100
     
     # Information Ratio
     agent_pnls = np.array(agent_metrics.all_episode_pnls)
@@ -417,17 +456,21 @@ def print_metrics_comparison(
     print(f"{'Mean Hedge Ratio':<40} {agent_metrics.mean_hedge_ratio:>18.4f} {benchmark_metrics.mean_hedge_ratio:>18.4f}")
     print(f"{'Std Hedge Ratio':<40} {agent_metrics.std_hedge_ratio:>18.4f} {benchmark_metrics.std_hedge_ratio:>18.4f}")
     
-    # === RISK METRICS ===
-    print(f"\n{'--- RISK METRICS ---':<40}")
-    print(f"{'P&L Variance':<40} {agent_metrics.pnl_variance:>18.6f} {benchmark_metrics.pnl_variance:>18.6f}")
-    print(f"{'P&L Std Dev':<40} {agent_metrics.pnl_std:>18.6f} {benchmark_metrics.pnl_std:>18.6f}")
-    print(f"{'Max Drawdown':<40} {agent_metrics.max_drawdown:>18.4f} {benchmark_metrics.max_drawdown:>18.4f}")
+    # === RISK METRICS (HEDGING EFFICIENCY - Priority #1) ===
+    print(f"\n{'--- HEDGING EFFICIENCY (Risk Mitigation) ---':<40}")
+    print(f"{'P&L Variance (lower=better)':<40} {agent_metrics.pnl_variance:>18.6f} {benchmark_metrics.pnl_variance:>18.6f}")
+    print(f"{'P&L Std Dev (lower=better)':<40} {agent_metrics.pnl_std:>18.6f} {benchmark_metrics.pnl_std:>18.6f}")
+    print(f"{'Max Drawdown (lower=better)':<40} {agent_metrics.max_drawdown:>18.4f} {benchmark_metrics.max_drawdown:>18.4f}")
     print(f"{'Worst Episode P&L':<40} {agent_metrics.max_episode_loss:>18.4f} {benchmark_metrics.max_episode_loss:>18.4f}")
+    print(f"{'Tail Risk 5% (VaR)':<40} {agent_metrics.tail_risk_5pct:>18.4f} {benchmark_metrics.tail_risk_5pct:>18.4f}")
+    print(f"{'Tail Risk 1% (Extreme)':<40} {agent_metrics.tail_risk_1pct:>18.4f} {benchmark_metrics.tail_risk_1pct:>18.4f}")
+    print(f"{'Positive P&L Ratio':<40} {agent_metrics.positive_pnl_ratio:>17.2f}% {benchmark_metrics.positive_pnl_ratio:>17.2f}%")
     
     # === RISK-ADJUSTED PERFORMANCE ===
     print(f"\n{'--- RISK-ADJUSTED PERFORMANCE ---':<40}")
     print(f"{'Sharpe Ratio':<40} {agent_metrics.sharpe_ratio:>18.4f} {benchmark_metrics.sharpe_ratio:>18.4f}")
     print(f"{'Sortino Ratio':<40} {agent_metrics.sortino_ratio:>18.4f} {benchmark_metrics.sortino_ratio:>18.4f}")
+    print(f"{'Calmar Ratio (Return/MaxDD)':<40} {agent_metrics.calmar_ratio:>18.4f} {benchmark_metrics.calmar_ratio:>18.4f}")
     
     # === IMPROVEMENT SUMMARY ===
     print(f"\n{'='*80}")
@@ -435,37 +478,65 @@ def print_metrics_comparison(
     print(f"{'='*80}")
     print(f"{'P&L Improvement':<40} {agent_metrics.pnl_improvement:>+18.4f} ({agent_metrics.pnl_improvement_pct:>+.2f}%)")
     print(f"{'Transaction Cost Savings':<40} {agent_metrics.tc_savings:>+18.4f} ({agent_metrics.tc_savings_pct:>+.2f}%)")
+    print(f"{'Variance Reduction':<40} {agent_metrics.variance_reduction:>+18.6f} ({agent_metrics.variance_reduction_pct:>+.2f}%)")
+    print(f"{'Max Drawdown Improvement':<40} {agent_metrics.drawdown_improvement:>+18.4f} ({agent_metrics.drawdown_improvement_pct:>+.2f}%)")
     print(f"{'Information Ratio':<40} {agent_metrics.information_ratio:>18.4f}")
     
     # === VERDICT ===
     print(f"\n{'='*80}")
     
     wins = 0
-    total_criteria = 4
+    total_criteria = 5
     
-    # P&L better
+    criteria_results = []
+    
+    # P&L better (higher is better)
     if agent_metrics.total_pnl > benchmark_metrics.total_pnl:
         wins += 1
+        criteria_results.append("✓ P&L")
+    else:
+        criteria_results.append("✗ P&L")
     
     # Lower transaction costs
     if agent_metrics.total_transaction_costs < benchmark_metrics.total_transaction_costs:
         wins += 1
+        criteria_results.append("✓ TC")
+    else:
+        criteria_results.append("✗ TC")
     
-    # Lower P&L variance (better hedge)
+    # Lower P&L variance (THE KEY METRIC - better hedge)
     if agent_metrics.pnl_variance < benchmark_metrics.pnl_variance:
         wins += 1
+        criteria_results.append("✓ Variance")
+    else:
+        criteria_results.append("✗ Variance")
+    
+    # Lower Max Drawdown
+    if agent_metrics.max_drawdown < benchmark_metrics.max_drawdown:
+        wins += 1
+        criteria_results.append("✓ MaxDD")
+    else:
+        criteria_results.append("✗ MaxDD")
     
     # Better Sharpe
     if agent_metrics.sharpe_ratio > benchmark_metrics.sharpe_ratio:
         wins += 1
+        criteria_results.append("✓ Sharpe")
+    else:
+        criteria_results.append("✗ Sharpe")
     
-    if wins >= 3:
+    criteria_str = " | ".join(criteria_results)
+    
+    if wins >= 4:
         print(f"✅ RL AGENT OUTPERFORMS BENCHMARK ({wins}/{total_criteria} criteria)")
-    elif wins >= 2:
-        print(f"🔶 MIXED RESULTS ({wins}/{total_criteria} criteria favor RL Agent)")
+    elif wins >= 3:
+        print(f"🔶 SLIGHT ADVANTAGE RL AGENT ({wins}/{total_criteria} criteria)")
+    elif wins == 2:
+        print(f"🔸 MIXED RESULTS ({wins}/{total_criteria} criteria favor RL Agent)")
     else:
         print(f"❌ BENCHMARK OUTPERFORMS RL AGENT ({total_criteria - wins}/{total_criteria} criteria)")
     
+    print(f"   Criteria: {criteria_str}")
     print(f"{'='*80}\n")
 
 

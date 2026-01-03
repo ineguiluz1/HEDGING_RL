@@ -407,10 +407,12 @@ def train_multi_year(
         epoch_rewards = []
         epoch_pnls = []
         
-        # Optionally shuffle training order
+        # Optionally shuffle training order (with controlled seed for reproducibility)
         env_order = list(range(len(train_envs)))
         if shuffle_years:
-            np.random.shuffle(env_order)
+            seed = CONFIG.get("seed", 42)
+            shuffle_rng = np.random.default_rng(seed + epoch)  # Different per epoch but reproducible
+            shuffle_rng.shuffle(env_order)
         
         for idx in env_order:
             year, env = train_envs[idx]
