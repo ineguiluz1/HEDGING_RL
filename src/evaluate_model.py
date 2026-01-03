@@ -70,6 +70,8 @@ def create_test_environments_from_real_data(
     end_year=2025,
     episode_length=30,
     norm_stats=None,
+    use_overlapping_windows=False,
+    window_step=1,
     verbose=True
 ):
     """
@@ -80,12 +82,16 @@ def create_test_environments_from_real_data(
         end_year: End year for test data
         episode_length: Length of each episode in days
         norm_stats: Normalization statistics from training (CRITICAL for correct evaluation)
+        use_overlapping_windows: If True, create overlapping windows starting at each day
+        window_step: Step size between windows (only used if use_overlapping_windows=True)
+                    1 = start new window every day, 5 = every 5 days, etc.
         verbose: Print progress
     
     Returns:
         list: List of HedgingEnv instances
     """
     from generate_contract import generate_historical_hedging_data
+    from hedging_env import HedgingEnv
     
     # Load S&P 500 data
     sp500_path = CONFIG.get("sp500_data_path", "./data/sp500_data.csv")
@@ -105,6 +111,7 @@ def create_test_environments_from_real_data(
         print(f"  Data path: {sp500_path}")
         print(f"  Years: {start_year}-{end_year}")
         print(f"  Episode length: {episode_length} days")
+        print(f"  Window mode: {'Overlapping (step=' + str(window_step) + ')' if use_overlapping_windows else 'Non-overlapping'}")
         if norm_stats is not None:
             print(f"  Using normalization stats from training")
     
@@ -129,14 +136,100 @@ def create_test_environments_from_real_data(
         print(f"  Total data points: {len(df)}")
         print(f"  Date range: {df[datetime_col].min().date()} to {df[datetime_col].max().date()}")
     
-    # Use the same windowing logic as run_training.py
-    test_envs = _create_windowed_test_envs(
-        df, 
-        window_length=episode_length,
-        norm_stats=norm_stats,  # Use norm_stats from training!
-        normalize=CONFIG.get("normalize_data", True),
-        verbose=verbose
-    )
+    if use_overlapping_windows:
+        # Create overlapping windows - start a new window every 'window_step' days
+        test_envs = _create_overlapping_test_envs(
+            df,
+            window_length=episode_length,
+            window_step=window_step,
+            norm_stats=norm_stats,
+            normalize=CONFIG.get("normalize_data", True),
+            verbose=verbose
+        )
+    else:
+        # Use the same non-overlapping windowing logic as run_training.py
+        test_envs = _create_windowed_test_envs(
+            df, 
+            window_length=episode_length,
+            norm_stats=norm_stats,
+            normalize=CONFIG.get("normalize_data", True),
+            verbose=verbose
+        )
+    
+    return test_envs
+
+
+def _create_overlapping_test_envs(
+    df,
+    window_length=30,
+    window_step=1,
+    norm_stats=None,
+    normalize=True,
+    verbose=True
+):
+    """
+    Create overlapping test environments where a new window starts every 'window_step' days.
+    
+    This provides much more comprehensive evaluation coverage:
+    - window_step=1: Every day starts a new 30-day window (maximum coverage)
+    - window_step=5: Every 5 days starts a new window (5x more than non-overlapping)
+    
+    Args:
+        df: DataFrame with hedging data
+        window_length: Length of each window in days
+        window_step: Days between window start points
+        norm_stats: Normalization statistics
+        normalize: Whether to normalize data
+        verbose: Print progress
+    
+    Returns:
+        list: List of HedgingEnv instances
+    """
+    from hedging_env import HedgingEnv
+    
+    n_rows = len(df)
+    
+    # Calculate number of windows
+    # With step=1 and length=30 and 1000 days: ~970 windows
+    # With step=30 (non-overlapping): ~33 windows
+    n_windows = (n_rows - window_length) // window_step + 1
+    
+    if n_windows <= 0:
+        raise ValueError(f"Not enough data ({n_rows} rows) for window_length={window_length}")
+    
+    if verbose:
+        print(f"\n  Creating {n_windows} overlapping test windows...")
+        print(f"    Window length: {window_length} days")
+        print(f"    Window step: {window_step} days")
+        print(f"    Data points: {n_rows}")
+    
+    test_envs = []
+    
+    for i in range(0, n_rows - window_length + 1, window_step):
+        window_df = df.iloc[i:i + window_length].copy()
+        
+        if len(window_df) < window_length:
+            continue
+        
+        # Create environment for this window
+        env = HedgingEnv(
+            option_prices=window_df['option_price'].values,
+            stock_prices=window_df['underlying_price'].values,
+            moneyness=window_df['moneyness'].values,
+            ttm=window_df['time_to_maturity'].values,
+            timestamps=window_df['timestamp'].values,
+            normalize=normalize,
+            normalization_stats=norm_stats,
+            verbose=False
+        )
+        test_envs.append(env)
+        
+        # Progress update
+        if verbose and len(test_envs) % 500 == 0:
+            print(f"    Created {len(test_envs)}/{n_windows} windows...")
+    
+    if verbose:
+        print(f"  ✓ Created {len(test_envs)} overlapping test environments")
     
     return test_envs
 
@@ -334,6 +427,13 @@ def main():
     END_YEAR = 2025
     EPISODE_LENGTH = 30  # Days per episode (same as training)
     OUTPUT_PATH = None  # None = save next to model
+    
+    # Window configuration
+    USE_OVERLAPPING_WINDOWS = True  # True = start window each day, False = non-overlapping
+    WINDOW_STEP = 1  # Days between windows (only if USE_OVERLAPPING_WINDOWS=True)
+                     # 1 = every day (max coverage, ~5000+ windows)
+                     # 5 = every 5 days (~1000 windows)
+                     # 30 = effectively non-overlapping
     # =========================================================================
     
     # Set random seed for reproducibility (same as run_training.py)
@@ -346,6 +446,7 @@ def main():
     print(f"Model: {MODEL_PATH}")
     print(f"Test period: {START_YEAR}-{END_YEAR}")
     print(f"Episode length: {EPISODE_LENGTH} days")
+    print(f"Window mode: {'Overlapping (step=' + str(WINDOW_STEP) + ')' if USE_OVERLAPPING_WINDOWS else 'Non-overlapping'}")
     print(f"Random seed: {seed}")
     print(f"{'='*70}\n")
     
@@ -399,6 +500,8 @@ def main():
         end_year=END_YEAR,
         episode_length=EPISODE_LENGTH,
         norm_stats=norm_stats,  # Use norm_stats from training!
+        use_overlapping_windows=USE_OVERLAPPING_WINDOWS,
+        window_step=WINDOW_STEP,
         verbose=True
     )
     
