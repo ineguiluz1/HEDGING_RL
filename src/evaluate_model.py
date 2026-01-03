@@ -243,6 +243,28 @@ def plot_real_data_comparison(rl_stats, benchmark_stats, save_path=None):
     ax4 = axes[1, 1]
     ax4.axis('off')
     
+    # Calculate additional metrics
+    rl_variance = np.var(rl_stats['all_cumulative_pnls']) if 'all_cumulative_pnls' in rl_stats else 0.0
+    bench_variance = np.var(benchmark_stats['all_pnls']) if 'all_pnls' in benchmark_stats else 0.0
+    
+    # Calculate Information Ratio
+    if len(rl_stats.get('all_cumulative_pnls', [])) == len(benchmark_stats.get('all_pnls', [])):
+        excess_returns = np.array(rl_stats['all_cumulative_pnls']) - np.array(benchmark_stats['all_pnls'])
+        tracking_error = np.std(excess_returns)
+        info_ratio = np.mean(excess_returns) / tracking_error if tracking_error > 0 else 0.0
+    else:
+        info_ratio = 0.0
+    
+    # Calculate Max Drawdown
+    def calc_max_dd(pnls):
+        cumulative = np.cumsum(pnls)
+        running_max = np.maximum.accumulate(cumulative)
+        drawdowns = running_max - cumulative
+        return np.max(drawdowns) if len(drawdowns) > 0 else 0.0
+    
+    rl_max_dd = calc_max_dd(rl_stats.get('all_cumulative_pnls', []))
+    bench_max_dd = calc_max_dd(benchmark_stats.get('all_pnls', []))
+    
     summary_text = f"""
     REAL S&P 500 EVALUATION RESULTS
     {'='*50}
@@ -251,6 +273,8 @@ def plot_real_data_comparison(rl_stats, benchmark_stats, save_path=None):
       Mean Episode P&L: {rl_stats['mean_cumulative_pnl']:.4f} ± {rl_stats['std_cumulative_pnl']:.4f}
       Total P&L: {rl_stats['total_cumulative_pnl']:.4f}
       Mean Sharpe: {rl_stats['mean_sharpe']:.4f}
+      Variance: {rl_variance:.6f}
+      Max Drawdown: {rl_max_dd:.4f}
       Mean Hedge Ratio: {rl_stats['mean_action']:.4f}
       Action Range: [{rl_stats.get('min_action', min(rl_stats['all_actions'])):.4f}, {rl_stats.get('max_action', max(rl_stats['all_actions'])):.4f}]
     
@@ -258,13 +282,18 @@ def plot_real_data_comparison(rl_stats, benchmark_stats, save_path=None):
       Mean Episode P&L: {benchmark_stats['mean_episode_pnl']:.4f} ± {benchmark_stats['std_episode_pnl']:.4f}
       Total P&L: {benchmark_stats['total_cumulative_pnl']:.4f}
       Mean Sharpe: {benchmark_stats['mean_sharpe']:.4f}
+      Variance: {bench_variance:.6f}
+      Max Drawdown: {bench_max_dd:.4f}
       Mean Delta: {benchmark_stats['mean_delta']:.4f}
     
     {'='*50}
     P&L Improvement: {rl_stats['total_cumulative_pnl'] - benchmark_stats['total_cumulative_pnl']:+.4f}
+    Variance Reduction: {bench_variance - rl_variance:+.6f}
+    Information Ratio: {info_ratio:.4f}
+    Max DD Improvement: {bench_max_dd - rl_max_dd:+.4f}
     """
     
-    ax4.text(0.1, 0.9, summary_text, transform=ax4.transAxes, fontsize=11,
+    ax4.text(0.05, 0.95, summary_text, transform=ax4.transAxes, fontsize=9,
              verticalalignment='top', fontfamily='monospace',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
@@ -300,7 +329,7 @@ def main():
     # =========================================================================
     # CONFIGURATION - Edit these values to change what to evaluate
     # =========================================================================
-    MODEL_PATH = "results/run_20251231_171949/td3_model.zip"
+    MODEL_PATH = "results/run_20260103_185415/td3_model.zip"
     START_YEAR = 2004
     END_YEAR = 2025
     EPISODE_LENGTH = 30  # Days per episode (same as training)
