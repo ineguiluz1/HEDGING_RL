@@ -1,5 +1,10 @@
 import numpy as np
 CONFIG = {
+    # =============================================================================
+    # MODEL SELECTION
+    # =============================================================================
+    "model_type": "TD3",                # Options: "TD3" or "SAC"
+    
     # ENVIRONMENT PARAMETERS
     
     # Financial Parameters
@@ -70,13 +75,20 @@ CONFIG = {
     "noise_clip": 0.2,                  # Clipping range for target policy noise
     "policy_freq": 2,                   # Frequency of policy updates (every N critic updates)
     
+    # SAC Algorithm Parameters
+    "sac_ent_coef": "auto",             # Entropy coefficient ("auto" for automatic tuning)
+    "sac_target_entropy": "auto",       # Target entropy ("auto" = -dim(action_space))
+    "sac_learning_rate": 3e-4,          # Learning rate for SAC (typically higher than TD3)
+    "sac_use_sde": False,               # Use State Dependent Exploration
+    "sac_sde_sample_freq": -1,          # SDE sample frequency (-1 = sample at each step)
+    
     # Optimization
     "actor_lr": 1e-4,                   # Learning rate for actor network (reduced from 3e-3)
     "critic_lr": 1e-4,                  # Learning rate for critic networks (reduced from 3e-3)
     "batch_size": 512,                  # Batch size for experience replay
     "replay_buffer_size": 200000,       # Maximum size of experience replay buffer
     
-    # Exploration Strategy (Ornstein-Uhlenbeck Process)
+    # Exploration Strategy (Ornstein-Uhlenbeck Process) - Used by TD3
     "initial_noise": 0.8,               # Starting exploration noise level (80% - VERY high for more variation)
     "final_noise": 0.05,                # Final exploration noise level (5%)
     "noise_decay_steps": 150000,        # Steps over which to decay exploration noise (~80% of training)

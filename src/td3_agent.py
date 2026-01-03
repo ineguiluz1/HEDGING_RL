@@ -334,7 +334,8 @@ class TD3Agent:
             'update_counter': self.update_counter,
             'current_noise': self.current_noise,
             'state_dim': self.state_dim,
-            'action_dim': self.action_dim
+            'action_dim': self.action_dim,
+            'model_type': 'TD3'
         }
         
         import json

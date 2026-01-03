@@ -98,7 +98,20 @@ def set_all_seeds(seed: int):
     print(f"All random seeds set to {seed} for reproducibility")
 
 from config import CONFIG, get_environment_config
-from td3_agent import TD3Agent, device
+
+# =============================================================================
+# MODEL SELECTION - Read from config.py
+# =============================================================================
+USE_MODEL = CONFIG.get("model_type", "TD3")  # Options: "TD3" or "SAC"
+
+# Import the appropriate agent based on model type
+if USE_MODEL == "SAC":
+    from sac_agent import SACAgent as Agent, device
+    print(f"Using SAC Agent")
+else:
+    from td3_agent import TD3Agent as Agent, device
+    print(f"Using TD3 Agent")
+
 from data_loader import (
     load_hedging_data,
     split_data_by_years,
@@ -183,8 +196,9 @@ def run_full_training_pipeline(
         results_dir = setup_results_dir()
     
     print(f"\n{'='*70}")
-    print(f"TD3 HEDGING AGENT - FULL TRAINING PIPELINE")
+    print(f"{USE_MODEL} HEDGING AGENT - FULL TRAINING PIPELINE")
     print(f"{'='*70}")
+    print(f"Model type: {USE_MODEL}")
     print(f"Results directory: {results_dir}")
     print(f"Device: {device}")
     print(f"Random seed: {seed}")
@@ -222,9 +236,11 @@ def run_full_training_pipeline(
     # =========================================================================
     # TRAINING
     # =========================================================================
-    print(f"\nStep 2: Training TD3 Agent on {len(train_envs)} trajectories...")
+    print(f"\nStep 2: Training {USE_MODEL} Agent on {len(train_envs)} trajectories...")
     
-    model_save_path = os.path.join(results_dir, "td3_model.pth")
+    # Use model type in filename for clarity
+    model_filename = f"{USE_MODEL.lower()}_model.pth"
+    model_save_path = os.path.join(results_dir, model_filename)
     CONFIG["model_save_path"] = model_save_path
     
     # Train using multi-environment approach (single pass, no validation)
@@ -235,7 +251,7 @@ def run_full_training_pipeline(
     
     # Save model
     agent.save(model_save_path)
-    print(f"\nModel saved to: {model_save_path}")
+    print(f"\n{USE_MODEL} Model saved to: {model_save_path}")
     
     # Save normalization statistics (CRITICAL for evaluation)
     norm_stats_path = os.path.join(results_dir, "normalization_stats.json")
@@ -472,7 +488,7 @@ def train_multi_env(train_envs, verbose=True):
     action_dim = train_envs[0].action_space.shape[0]
     
     # Create agent and initialize with first environment
-    agent = TD3Agent(state_dim, action_dim)
+    agent = Agent(state_dim, action_dim)
     agent.set_env(train_envs[0])  # Initialize model with first environment
     
     # =========================================================================
@@ -700,7 +716,7 @@ def train_single_episode(agent, env, global_step=0):
     Uses SB3's built-in training through collect_rollouts and train.
     
     Args:
-        agent: TD3Agent
+        agent: TD3Agent or SACAgent
         env: HedgingEnv
         global_step: Global step counter for logging
     

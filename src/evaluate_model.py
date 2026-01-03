@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Evaluate trained TD3 agent on REAL S&P 500 data.
+Evaluate trained TD3/SAC agent on REAL S&P 500 data.
 
 This script evaluates a trained agent using real market data (S&P 500)
 with the same multi-episode paradigm used in training.
@@ -45,7 +45,107 @@ def set_all_seeds(seed: int):
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 from config import CONFIG
-from td3_agent import TD3Agent, device
+
+# =============================================================================
+# MODEL TYPE DETECTION
+# =============================================================================
+def detect_model_type(model_path):
+    """
+    Detect model type (TD3 or SAC) from the saved model.
+    
+    1. Try to read from metadata JSON
+    2. If no metadata, infer from filename
+    3. Default to CONFIG setting
+    
+    Args:
+        model_path: Path to the model file
+    
+    Returns:
+        str: "TD3" or "SAC"
+    """
+    # Handle path extensions
+    if model_path.endswith('.pth'):
+        base_path = model_path[:-4]
+    elif model_path.endswith('.zip'):
+        base_path = model_path[:-4]
+    else:
+        base_path = model_path
+    
+    # Try to read metadata
+    metadata_path = base_path + '_metadata.json'
+    if os.path.exists(metadata_path):
+        try:
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+                model_type = metadata.get('model_type')
+                if model_type in ['TD3', 'SAC']:
+                    print(f"  Model type detected from metadata: {model_type}")
+                    return model_type
+        except:
+            pass
+    
+    # Try to infer from filename
+    filename = os.path.basename(base_path).lower()
+    if 'sac' in filename:
+        print(f"  Model type inferred from filename: SAC")
+        return 'SAC'
+    elif 'td3' in filename:
+        print(f"  Model type inferred from filename: TD3")
+        return 'TD3'
+    
+    # Fall back to config
+    model_type = CONFIG.get("model_type", "TD3")
+    print(f"  Model type from config (default): {model_type}")
+    return model_type
+
+
+def find_model_in_directory(run_dir):
+    """
+    Find model file in a run directory.
+    
+    Searches for td3_model.zip or sac_model.zip in the specified directory.
+    
+    Args:
+        run_dir: Path to the run directory (e.g., "results/run_20260103_185415/")
+    
+    Returns:
+        str: Full path to the model file, or None if not found
+    """
+    # Ensure run_dir is treated as a directory
+    if not os.path.isdir(run_dir):
+        # Maybe it's already a full path to a model file
+        if os.path.isfile(run_dir):
+            return run_dir
+        return None
+    
+    # Look for model files in priority order
+    model_candidates = [
+        'sac_model.zip',
+        'td3_model.zip',
+        'sac_model.pth',
+        'td3_model.pth',
+        'model.zip',  # Generic fallback
+        'model.pth'
+    ]
+    
+    for candidate in model_candidates:
+        full_path = os.path.join(run_dir, candidate)
+        if os.path.exists(full_path):
+            print(f"  Found model: {candidate}")
+            return full_path
+    
+    return None
+
+
+# =============================================================================
+# MODEL SELECTION - Import both agents for dynamic selection
+# =============================================================================
+from td3_agent import TD3Agent, device as td3_device
+from sac_agent import SACAgent, device as sac_device
+
+# Device will be set based on which agent is used
+device = td3_device
+
 from data_loader import (
     load_hedging_data,
     split_data_by_years,
@@ -422,14 +522,18 @@ def main():
     # =========================================================================
     # CONFIGURATION - Edit these values to change what to evaluate
     # =========================================================================
-    MODEL_PATH = "results/run_20260103_185415/td3_model.zip"
+    # Can be either:
+    #   - A run directory: "results/run_20260103_185415/"
+    #   - A specific model file: "results/run_20260103_185415/td3_model.zip"
+    MODEL_PATH = "results/run_20260103_200734/"
+    
     START_YEAR = 2004
     END_YEAR = 2025
     EPISODE_LENGTH = 30  # Days per episode (same as training)
     OUTPUT_PATH = None  # None = save next to model
     
     # Window configuration
-    USE_OVERLAPPING_WINDOWS = True  # True = start window each day, False = non-overlapping
+    USE_OVERLAPPING_WINDOWS = False  # True = start window each day, False = non-overlapping
     WINDOW_STEP = 1  # Days between windows (only if USE_OVERLAPPING_WINDOWS=True)
                      # 1 = every day (max coverage, ~5000+ windows)
                      # 5 = every 5 days (~1000 windows)
@@ -443,56 +547,57 @@ def main():
     print(f"\n{'='*70}")
     print(f"REAL S&P 500 DATA EVALUATION - COMPREHENSIVE METRICS")
     print(f"{'='*70}")
-    print(f"Model: {MODEL_PATH}")
+    print(f"Run/Model: {MODEL_PATH}")
     print(f"Test period: {START_YEAR}-{END_YEAR}")
     print(f"Episode length: {EPISODE_LENGTH} days")
     print(f"Window mode: {'Overlapping (step=' + str(WINDOW_STEP) + ')' if USE_OVERLAPPING_WINDOWS else 'Non-overlapping'}")
     print(f"Random seed: {seed}")
     print(f"{'='*70}\n")
     
-    # Resolve model path (handle relative paths from workspace root)
+    # Resolve model path (handle both directory and file paths)
     model_path = MODEL_PATH
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    workspace_root = os.path.dirname(script_dir)
     
-    # If path doesn't exist, try from workspace root
-    if not os.path.exists(model_path):
-        # Get workspace root (parent of src/)
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        workspace_root = os.path.dirname(script_dir)
-        workspace_model_path = os.path.join(workspace_root, model_path)
-        
-        if os.path.exists(workspace_model_path):
-            model_path = workspace_model_path
+    # First, resolve to absolute path if relative
+    if not os.path.isabs(model_path):
+        # Try from current directory
+        if os.path.exists(model_path):
+            model_path = os.path.abspath(model_path)
+        # Try from workspace root
+        elif os.path.exists(os.path.join(workspace_root, model_path)):
+            model_path = os.path.join(workspace_root, model_path)
         else:
-            # Try adding extensions
-            for ext in ['.zip', '.pth', '']:
-                if os.path.exists(model_path + ext):
-                    model_path = model_path + ext
-                    break
-                elif os.path.exists(workspace_model_path + ext):
-                    model_path = workspace_model_path + ext
-                    break
-            else:
-                # Try without extension
-                model_base = model_path.rsplit('.', 1)[0] if '.' in model_path else model_path
-                workspace_base = os.path.join(workspace_root, model_base)
-                for ext in ['.zip', '.pth']:
-                    if os.path.exists(model_base + ext):
-                        model_path = model_base + ext
-                        break
-                    elif os.path.exists(workspace_base + ext):
-                        model_path = workspace_base + ext
-                        break
-                else:
-                    print(f"Error: Model not found")
-                    print(f"  Tried: {MODEL_PATH}")
-                    print(f"  Tried: {workspace_model_path}")
-                    return
+            print(f"Error: Path not found")
+            print(f"  Tried: {MODEL_PATH}")
+            print(f"  Tried: {os.path.join(workspace_root, MODEL_PATH)}")
+            return
     
-    model_path_final = model_path
-    model_dir = os.path.dirname(model_path_final)
+    # If it's a directory, find the model file inside
+    print(f"Searching for model...")
+    if os.path.isdir(model_path):
+        model_file = find_model_in_directory(model_path)
+        if model_file is None:
+            print(f"Error: No model file found in directory: {model_path}")
+            print(f"  Expected: td3_model.zip, sac_model.zip, or similar")
+            return
+        model_path_final = model_file
+        model_dir = model_path
+    elif os.path.isfile(model_path):
+        model_path_final = model_path
+        model_dir = os.path.dirname(model_path_final)
+    else:
+        print(f"Error: Model path does not exist: {model_path}")
+        return
+    
+    print(f"  Using model: {os.path.basename(model_path_final)}")
+    print(f"  From directory: {model_dir}")
     
     # Load normalization stats from training (CRITICAL for correct evaluation)
     norm_stats = load_normalization_stats(model_path_final)
+    
+    # Detect model type from saved model
+    USE_MODEL = detect_model_type(model_path_final)
     
     # Create test environments from real S&P 500 data
     test_envs = create_test_environments_from_real_data(
@@ -505,14 +610,20 @@ def main():
         verbose=True
     )
     
-    # Create agent and load model
-    print("Loading trained agent...")
+    # Create agent and load model based on detected type
+    print(f"Loading trained {USE_MODEL} agent...")
     sample_env = test_envs[0]
     state_dim = sample_env.observation_space.shape[0]
     action_dim = sample_env.action_space.shape[0]
-    agent = TD3Agent(state_dim=state_dim, action_dim=action_dim, env=sample_env)
+    
+    # Select agent class based on detected model type
+    if USE_MODEL == "SAC":
+        agent = SACAgent(state_dim=state_dim, action_dim=action_dim, env=sample_env)
+    else:
+        agent = TD3Agent(state_dim=state_dim, action_dim=action_dim, env=sample_env)
+    
     agent.load(model_path_final)
-    print(f"  ✓ Model loaded from {model_path_final}")
+    print(f"  ✓ {USE_MODEL} Model loaded from {model_path_final}")
     
     # =========================================================================
     # COMPREHENSIVE METRICS EVALUATION
