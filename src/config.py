@@ -3,7 +3,7 @@ CONFIG = {
     # =============================================================================
     # MODEL SELECTION
     # =============================================================================
-    "model_type": "TD3",                # Options: "TD3" or "SAC"
+    "model_type": "RTD3",                # Options: "TD3", "SAC" or "RTD3"
     
     # ENVIRONMENT PARAMETERS
     
