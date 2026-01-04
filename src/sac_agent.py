@@ -222,9 +222,39 @@ class SACAgent:
                 infos=[{}]
             )
     
-    def train_step(self):
+    def log_weights_and_gradients(self, writer, step: int):
+        """
+        Log network weights and gradients to TensorBoard for debugging.
+        Useful for detecting vanishing/exploding gradients and weight issues.
+        
+        Args:
+            writer: TensorBoard SummaryWriter
+            step: Current training step
+        """
+        if self.model is None or writer is None:
+            return
+        
+        # Log actor network weights and gradients
+        for name, param in self.model.actor.named_parameters():
+            if param.requires_grad:
+                writer.add_histogram(f'sac_weights/actor/{name}', param.data, step)
+                if param.grad is not None:
+                    writer.add_histogram(f'sac_gradients/actor/{name}', param.grad, step)
+        
+        # Log critic networks weights and gradients
+        for name, param in self.model.critic.named_parameters():
+            if param.requires_grad:
+                writer.add_histogram(f'sac_weights/critic/{name}', param.data, step)
+                if param.grad is not None:
+                    writer.add_histogram(f'sac_gradients/critic/{name}', param.grad, step)
+    
+    def train_step(self, writer=None, log_weights_every: int = 100):
         """
         Perform one training step
+        
+        Args:
+            writer: Optional TensorBoard writer for logging weights/gradients
+            log_weights_every: Log weights every N updates (default 100)
         
         Returns:
             tuple: (actor_loss, critic_loss) or (None, None) if buffer not ready
@@ -240,6 +270,10 @@ class SACAgent:
         
         # SB3's train performs one gradient step
         self.model.train(gradient_steps=1, batch_size=self.batch_size)
+        
+        # Log weights and gradients periodically
+        if writer is not None and self.update_counter % log_weights_every == 0:
+            self.log_weights_and_gradients(writer, self.update_counter)
         
         return 0.0, 0.0
     

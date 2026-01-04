@@ -1,0 +1,1 @@
+{"total_steps": 208817, "update_counter": 208817, "current_noise": 0.05, "state_dim": 12, "action_dim": 1, "model_type": "TD3"}
