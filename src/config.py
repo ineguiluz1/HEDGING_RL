@@ -3,7 +3,7 @@ CONFIG = {
     # =============================================================================
     # MODEL SELECTION
     # =============================================================================
-    "model_type": "RTD3",                # Options: "TD3", "SAC" or "RTD3"
+    "model_type": "TD3", # Options: "TD3", "SAC" or "RTD3"
     
     # ENVIRONMENT PARAMETERS
     
@@ -13,8 +13,8 @@ CONFIG = {
     "notional": 1000,                   # Notional amount for option exposure ($1000)
     
     # Reward Function Configuration
-    # Options: "delta_tracking" (PRIMARY), "variance_minimization", "cara_utility", "profit_seeking"
-    "reward_type": "variance_minimization",        # Track BS delta as primary objective
+    # Options: "delta_tracking", "variance_minimization", "cara_utility", "profit_seeking"
+    "reward_type": "cara_utility",        # Track BS delta as primary objective
     "delta_tracking_weight": 0.1,           # Weight for tracking error (main component)
     "pnl_variance_weight": 2.0,             # Weight for P&L variance (secondary)
     "transaction_cost_weight": 1.0,         # Weight for transaction cost penalty (teaches cost of rebalancing)
@@ -58,7 +58,7 @@ CONFIG = {
     # Training Configuration
     "episodes": 1,                      # Number of training episodes (1 = single time series)
     "num_episodes": 100,                # Number of episodes for single-env training
-    "num_epochs": 10,                   # Number of epochs for multi-year training
+    "num_epochs": 1,                   # Number of epochs for multi-year training
     "update_every": 1,                  # Training updates every N steps
     "warmup_steps": 5000,               # Random actions before training (5000 steps)
     "seed": 1234,                        # Random seed for reproducibility
@@ -111,7 +111,7 @@ CONFIG = {
     
     # Monte Carlo Parameters
     "use_montecarlo_training": True,               # Use MC trajectories for training
-    "mc_train_trajectories": 500,                  # Number of MC trajectories for training (increased for better learning)
+    "mc_train_trajectories": 12000,                  # Number of MC trajectories for training (increased for better learning)
     "mc_episode_length": 30,                       # Episode length in trading days (30 = option expiry simulation)
     "mc_steps_per_year": 252,                      # Trading days per year (for annualization calculations)
     "test_start_year": 2004,                       # Start year for test data (real data)

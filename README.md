@@ -216,8 +216,55 @@ The agent is compared against traditional Delta Hedging:
 - Same transaction costs and risk parameters
 - Evaluated on the same test period
 
+## Hyperparameter Optimization with Optuna
+
+The project includes comprehensive hyperparameter optimization studies for both SAC and TD3 agents:
+
+### Running Optuna Studies
+
+```bash
+# SAC optimization
+python src/optuna_sac.py
+
+# TD3 optimization
+python src/optuna_td3.py
+```
+
+See [OPTUNA_HPC_GUIDE.md](OPTUNA_HPC_GUIDE.md) for parallel execution on HPC clusters.
+
+### Visualizing Optuna Results
+
+Export all visualization plots (interactive HTML):
+
+```bash
+# Export all plots (SAC + TD3)
+bash export_plots.sh
+
+# Or use Python directly
+python export_optuna_plots.py
+
+# Export only SAC plots
+python export_optuna_plots.py --sac-only
+
+# Export only TD3 plots
+python export_optuna_plots.py --td3-only
+```
+
+Generated plots are saved to `optuna_studies/plots/`:
+- **Optimization History**: Evolution of objective value
+- **Parameter Importances**: Which hyperparameters matter most
+- **Parallel Coordinate**: Multi-dimensional parameter visualization
+- **Contour Plots**: 2D parameter relationships
+- **Slice Plots**: Individual parameter effects
+- **EDF**: Empirical distribution of objective values
+- **Timeline**: Trial execution chronology
+
+See [OPTUNA_PLOTS_GUIDE.md](OPTUNA_PLOTS_GUIDE.md) for detailed usage and interpretation.
+
 ## References
 
 - Fujimoto et al. (2018) "Addressing Function Approximation Error in Actor-Critic Methods" (TD3)
+- Haarnoja et al. (2018) "Soft Actor-Critic: Off-Policy Maximum Entropy Deep RL"
 - Deep Hedging literature
+- Optuna: A hyperparameter optimization framework
 " 

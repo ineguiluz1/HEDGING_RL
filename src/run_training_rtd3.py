@@ -6,6 +6,7 @@ Main Training Script for Recurrent TD3 (RTD3) Hedging Agent
 This script trains a Recurrent TD3 agent for options hedging using:
 - Monte Carlo simulated trajectories for training
 - Real S&P 500 daily data for testing
+- SAME training flow as SAC/TD3 (curriculum learning + early stopping)
 
 Usage:
     python src/run_training_rtd3.py
@@ -13,6 +14,7 @@ Usage:
 Configuration:
     Training: mc_train_trajectories (e.g., 50) synthetic 1-year paths
     Testing: Real S&P 500 data (2004-2025)
+    Flow: Streaming single-pass with curriculum phases (no epochs)
 
 Author: Generated for HEDGING_RL project
 """
@@ -90,7 +92,7 @@ def run_full_training_pipeline(
     print(f"Training episodes: {CONFIG.get('mc_train_trajectories', 50)} x {CONFIG.get('mc_episode_length', 30)} days")
     print(f"Test data: Real S&P 500 ({CONFIG.get('test_start_year', 2004)}-{CONFIG.get('test_end_year', 2025)})")
     print(f"Test mode: {'Windowed episodes' if CONFIG.get('use_windowed_test', True) else 'Single long episode'}")
-    print(f"Note: Single-pass training (no epochs, no validation to avoid overfitting)")
+    print(f"Training mode: Streaming (same as SAC/TD3 - curriculum + early stopping)")
     print(f"{'='*70}\n")
     
     # Save configuration
@@ -239,6 +241,10 @@ def run_full_training_pipeline(
 def train_multi_env(train_envs, verbose=True):
     """
     Train RTD3 agent on multiple environments (trajectories).
+    NOW USES THE SAME FLOW AS SAC/TD3:
+    - Curriculum learning (volatility/drift based)
+    - Early stopping per phase
+    - No epochs (single pass streaming)
     """
     if len(train_envs) == 0:
         raise ValueError("No training environments provided")
@@ -255,23 +261,107 @@ def train_multi_env(train_envs, verbose=True):
     
     total_steps = 0
     n_trajectories = len(train_envs)
-    num_epochs = CONFIG.get("num_epochs", 10)
+    
+    # =========================================================================
+    # CURRICULUM LEARNING SETUP (same as SAC/TD3)
+    # =========================================================================
+    use_curriculum = CONFIG.get('use_curriculum_learning', False)
+    use_vol_curriculum = CONFIG.get('use_volatility_curriculum', False)
+    
+    # Define curriculum phases based on how trajectories were generated
+    curriculum_phases = []
+    
+    if use_curriculum or use_vol_curriculum:
+        # Calculate phase boundaries
+        neutral_ratio = CONFIG.get('curriculum_neutral_ratio', 0.4)
+        vol_phases = CONFIG.get('vol_curriculum_phases', {})
+        
+        if use_vol_curriculum and vol_phases:
+            # Volatility curriculum has priority
+            low_ratio = vol_phases.get('low', {}).get('ratio', 0.3)
+            medium_ratio = vol_phases.get('medium', {}).get('ratio', 0.4)
+            high_ratio = vol_phases.get('high', {}).get('ratio', 0.3)
+            
+            low_end = int(n_trajectories * low_ratio)
+            medium_end = int(n_trajectories * (low_ratio + medium_ratio))
+            
+            curriculum_phases = [
+                {'name': 'Low Volatility', 'start': 0, 'end': low_end},
+                {'name': 'Medium Volatility', 'start': low_end, 'end': medium_end},
+                {'name': 'High Volatility', 'start': medium_end, 'end': n_trajectories}
+            ]
+        elif use_curriculum:
+            # Drift curriculum
+            neutral_end = int(n_trajectories * neutral_ratio)
+            curriculum_phases = [
+                {'name': 'Neutral Drift', 'start': 0, 'end': neutral_end},
+                {'name': 'Mixed Drift', 'start': neutral_end, 'end': n_trajectories}
+            ]
+    
+    if not curriculum_phases:
+        # No curriculum - single phase
+        curriculum_phases = [{'name': 'Full Training', 'start': 0, 'end': n_trajectories}]
     
     if verbose:
         print(f"\n{'='*60}")
-        print(f"TRAINING ON {n_trajectories} TRAJECTORIES for {num_epochs} EPOCHS")
+        print(f"TRAINING ON {n_trajectories} TRAJECTORIES (Streaming - No Epochs)")
         print(f"{'='*60}")
+        print(f"  Curriculum phases: {len(curriculum_phases)}")
+        for phase in curriculum_phases:
+            print(f"    - {phase['name']}: trajectories {phase['start']}-{phase['end']} ({phase['end']-phase['start']} total)")
     
-    for epoch in range(num_epochs):
+    # =========================================================================
+    # EARLY STOPPING SETUP (same as SAC/TD3)
+    # =========================================================================
+    use_early_stopping = CONFIG.get('use_early_stopping', False)
+    es_patience = CONFIG.get('early_stopping_patience', 500)
+    es_min_delta = CONFIG.get('early_stopping_min_delta', 0.001)
+    es_window = CONFIG.get('early_stopping_window', 100)
+    es_per_phase = CONFIG.get('early_stopping_per_curriculum_phase', True)
+    es_min_episodes = CONFIG.get('early_stopping_min_episodes_per_phase', 200)
+    
+    if use_early_stopping and verbose:
+        print(f"\n  Early Stopping enabled:")
+        print(f"    Patience: {es_patience} episodes")
+        print(f"    Min improvement: {es_min_delta}")
+        print(f"    Moving average window: {es_window}")
+        print(f"    Per curriculum phase: {es_per_phase}")
+    
+    # Shuffle environments with dedicated RNG for reproducibility
+    shuffle_seed = CONFIG.get("seed", 101)
+    shuffle_rng = np.random.default_rng(shuffle_seed)
+    
+    all_rewards = []
+    all_losses = []
+    total_episodes_trained = 0
+    early_stopped_phases = []
+    
+    # =========================================================================
+    # TRAINING LOOP WITH CURRICULUM PHASES (same as SAC/TD3)
+    # =========================================================================
+    for phase_idx, phase in enumerate(curriculum_phases):
+        phase_name = phase['name']
+        phase_start = phase['start']
+        phase_end = phase['end']
+        phase_size = phase_end - phase_start
+        
         if verbose:
-            print(f"\nEpoch {epoch + 1}/{num_epochs}")
-            
-        # Shuffle environments
-        env_indices = np.random.permutation(n_trajectories)
+            print(f"\n{'-'*60}")
+            print(f"PHASE {phase_idx + 1}/{len(curriculum_phases)}: {phase_name}")
+            print(f"  Trajectories: {phase_start} to {phase_end} ({phase_size} total)")
+            print(f"{'-'*60}")
         
-        epoch_rewards = []
+        # Get indices for this phase and shuffle them
+        phase_indices = list(range(phase_start, phase_end))
+        shuffle_rng.shuffle(phase_indices)
         
-        for i, env_idx in enumerate(env_indices):
+        # Early stopping state for this phase
+        phase_rewards = []
+        best_avg_reward = float('-inf')
+        episodes_without_improvement = 0
+        phase_early_stopped = False
+        
+        for i, env_idx in enumerate(phase_indices):
             env = train_envs[env_idx]
             
             # Train one episode on this environment
@@ -280,7 +370,10 @@ def train_multi_env(train_envs, verbose=True):
             )
             
             total_steps += episode_steps
-            epoch_rewards.append(episode_reward)
+            total_episodes_trained += 1
+            all_rewards.append(episode_reward)
+            all_losses.extend(episode_losses)
+            phase_rewards.append(episode_reward)
             
             # Record metrics
             loss = episode_losses[-1] if episode_losses else 0.0
@@ -293,12 +386,62 @@ def train_multi_env(train_envs, verbose=True):
                 noise=agent.current_noise
             )
             
-            if verbose and (i + 1) % 100 == 0: # Print less frequently
-                progress = (i + 1) / n_trajectories * 100
-                print(f"  [{progress:5.1f}%] Trajectory {env_idx + 1}: Reward={episode_reward:.2f}, Steps={episode_steps}")
+            # Progress reporting
+            if verbose and (i + 1) % 10 == 0:
+                progress = (i + 1) / phase_size * 100
+                recent_rewards = phase_rewards[-10:]
+                avg_recent = np.mean(recent_rewards)
+                print(f"  [{progress:5.1f}%] Episode {i+1}/{phase_size}: Reward={episode_reward:.2f}, Avg(last 10)={avg_recent:.2f}")
+            
+            # =========================================================================
+            # EARLY STOPPING CHECK (same as SAC/TD3)
+            # =========================================================================
+            if use_early_stopping and es_per_phase and len(phase_rewards) >= es_min_episodes:
+                # Compute moving average over recent episodes
+                if len(phase_rewards) >= es_window:
+                    current_avg = np.mean(phase_rewards[-es_window:])
+                    
+                    if current_avg > best_avg_reward + es_min_delta:
+                        # Improvement detected
+                        best_avg_reward = current_avg
+                        episodes_without_improvement = 0
+                    else:
+                        episodes_without_improvement += 1
+                    
+                    # Check if patience exceeded
+                    if episodes_without_improvement >= es_patience:
+                        phase_early_stopped = True
+                        early_stopped_phases.append(phase_name)
+                        if verbose:
+                            print(f"\n  Early stopping triggered for phase '{phase_name}'")
+                            print(f"    No improvement for {es_patience} episodes")
+                            print(f"    Best avg reward: {best_avg_reward:.4f}")
+                            print(f"    Episodes trained in phase: {len(phase_rewards)}/{phase_size}")
+                        break
         
+        # Phase summary
         if verbose:
-            print(f"  Epoch Avg Reward: {np.mean(epoch_rewards):.4f}")
+            phase_avg = np.mean(phase_rewards) if phase_rewards else 0.0
+            print(f"\n  Phase '{phase_name}' completed:")
+            print(f"    Episodes trained: {len(phase_rewards)}/{phase_size}")
+            print(f"    Average reward: {phase_avg:.4f}")
+            if phase_early_stopped:
+                print(f"    Status: Early stopped")
+            else:
+                print(f"    Status: Completed fully")
+    
+    # =========================================================================
+    # FINAL SUMMARY
+    # =========================================================================
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"TRAINING COMPLETED")
+        print(f"{'='*60}")
+        print(f"  Total episodes trained: {total_episodes_trained}/{n_trajectories}")
+        print(f"  Total steps: {total_steps}")
+        print(f"  Overall avg reward: {np.mean(all_rewards):.4f}")
+        if early_stopped_phases:
+            print(f"  Early stopped phases: {', '.join(early_stopped_phases)}")
     
     return agent, metrics
 
@@ -405,7 +548,8 @@ def evaluate_agent(agent, env, verbose=True):
         'mean_action': np.mean(actions_arr),
         'std_action': np.std(actions_arr),
         'sharpe_ratio': np.mean(pnls_arr) / (np.std(pnls_arr) + 1e-8) * np.sqrt(252),
-        'pnls': pnls_arr
+        'pnls': pnls_arr,
+        'actions': actions_arr  # Added for compatibility with multi_episode evaluation
     }
     
     if verbose:
@@ -417,39 +561,94 @@ def evaluate_agent(agent, env, verbose=True):
 def evaluate_agent_multi_episode(agent, test_envs, verbose=True):
     """
     Evaluate RTD3 agent on multiple test episodes.
+    Returns same format as trainer.py version for compatibility.
     """
-    all_pnls = []
     all_rewards = []
+    all_pnls = []
+    all_cumulative_pnls = []
     all_sharpes = []
     all_actions = []
+    all_tracking_errors = []
+    episode_stats_list = []
     
     if verbose:
-        print(f"Evaluating on {len(test_envs)} episodes...")
+        print(f"\n{'='*70}")
+        print(f"MULTI-EPISODE EVALUATION ({len(test_envs)} episodes)")
+        print(f"{'='*70}")
         
     for i, env in enumerate(test_envs):
         stats = evaluate_agent(agent, env, verbose=False)
         
-        all_pnls.append(stats['total_pnl'])
         all_rewards.append(stats['total_reward'])
+        episode_pnl = np.sum(stats['pnls'])
+        all_pnls.append(episode_pnl)
+        all_cumulative_pnls.append(episode_pnl)
         all_sharpes.append(stats['sharpe_ratio'])
-        all_actions.append(stats['mean_action'])
+        all_actions.extend(stats['actions'].tolist())
+        episode_stats_list.append(stats)
+        
+        # Calculate tracking error (deviation from BS delta)
+        if hasattr(env, 'bs_delta_raw') and len(env.bs_delta_raw) > 0:
+            actions = stats['actions']
+            n_steps = min(len(actions), len(env.bs_delta_raw) - 1)
+            bs_deltas = env.bs_delta_raw[1:n_steps+1]
+            tracking_error = np.mean((actions[:n_steps] - bs_deltas) ** 2)
+            all_tracking_errors.append(tracking_error)
         
         if verbose and (i+1) % 50 == 0:
             print(f"  Evaluated {i+1}/{len(test_envs)} episodes...")
+    
+    # Calculate tracking statistics
+    mean_tracking_error = np.mean(all_tracking_errors) if all_tracking_errors else 0.0
+    std_tracking_error = np.std(all_tracking_errors) if all_tracking_errors else 0.0
+    rmse_tracking = np.sqrt(mean_tracking_error)
             
+    # Return same format as trainer.py for compatibility with plot functions
     return {
+        # Per-episode means
+        'mean_episode_reward': np.mean(all_rewards),
+        'std_episode_reward': np.std(all_rewards),
         'mean_episode_pnl': np.mean(all_pnls),
         'std_episode_pnl': np.std(all_pnls),
-        'total_cumulative_pnl': sum(all_pnls),
+        'mean_cumulative_pnl': np.mean(all_cumulative_pnls),
+        'std_cumulative_pnl': np.std(all_cumulative_pnls),
         'mean_sharpe': np.mean(all_sharpes),
+        'std_sharpe': np.std(all_sharpes),
+        
+        # Aggregated totals
+        'total_reward': sum(all_rewards),
+        'total_pnl': sum(all_pnls),
+        'total_cumulative_pnl': sum(all_pnls),
+        
+        # Action statistics
         'mean_action': np.mean(all_actions),
-        'std_action': np.std(all_actions)
+        'std_action': np.std(all_actions),
+        'min_action': np.min(all_actions),
+        'max_action': np.max(all_actions),
+        
+        # Tracking error metrics
+        'mean_tracking_error': mean_tracking_error,
+        'std_tracking_error': std_tracking_error,
+        'rmse_tracking': rmse_tracking,
+        
+        # Number of episodes
+        'n_episodes': len(test_envs),
+        
+        # All individual episode data (needed for plotting)
+        'episode_stats': episode_stats_list,
+        'all_rewards': all_rewards,
+        'all_pnls': all_pnls,
+        'all_cumulative_pnls': all_cumulative_pnls,
+        'all_sharpes': all_sharpes,
+        'all_actions': np.array(all_actions),
+        'all_tracking_errors': all_tracking_errors
     }
 
 
 def run_benchmark_multi_episode(test_envs, verbose=True):
     """
     Run delta hedging benchmark on multiple test episodes.
+    Returns same format as run_training.py version for compatibility.
     """
     all_pnls = []
     all_rewards = []
@@ -472,7 +671,7 @@ def run_benchmark_multi_episode(test_envs, verbose=True):
         if verbose and (i + 1) % 50 == 0:
             print(f"  Benchmark evaluated {i + 1}/{len(test_envs)} episodes...")
     
-    # Aggregate
+    # Aggregate - return same format as run_training.py
     aggregated = {
         'mean_episode_pnl': np.mean(all_pnls),
         'std_episode_pnl': np.std(all_pnls),
@@ -482,14 +681,21 @@ def run_benchmark_multi_episode(test_envs, verbose=True):
         'std_sharpe': np.std(all_sharpes),
         'mean_delta': np.mean(all_deltas),
         'std_delta': np.std(all_deltas),
+        'n_episodes': len(test_envs),
+        'all_pnls': all_pnls,
+        'all_rewards': all_rewards,
+        'all_sharpes': all_sharpes,
+        'episode_results': all_episode_results,
         'aggregated_df': pd.concat([r['df'] for r in all_episode_results], ignore_index=True)
     }
     
     if verbose:
         print(f"\nBenchmark Multi-Episode Results:")
-        print(f"  Mean Episode P&L: {aggregated['mean_episode_pnl']:.4f}")
+        print(f"  Episodes: {len(test_envs)}")
+        print(f"  Mean Episode P&L: {aggregated['mean_episode_pnl']:.4f} ± {aggregated['std_episode_pnl']:.4f}")
         print(f"  Total P&L: {aggregated['total_cumulative_pnl']:.4f}")
-        print(f"  Mean Sharpe: {aggregated['mean_sharpe']:.4f}")
+        print(f"  Mean Sharpe: {aggregated['mean_sharpe']:.4f} ± {aggregated['std_sharpe']:.4f}")
+        print(f"  Mean Delta: {aggregated['mean_delta']:.4f}")
     
     return aggregated
 
