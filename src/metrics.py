@@ -695,6 +695,10 @@ def evaluate_agent_with_metrics(
         reset_result = env.reset()
         state = reset_result[0] if isinstance(reset_result, tuple) else reset_result
         
+        # Reset hidden state for Recurrent agents (RTD3)
+        if hasattr(agent, 'reset_hidden_state'):
+            agent.reset_hidden_state()
+        
         step_pnls = []
         hedge_ratios = []
         bs_deltas = []

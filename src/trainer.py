@@ -291,6 +291,10 @@ def evaluate_agent(agent: TD3Agent, env, verbose: bool = True) -> Dict:
     if isinstance(state, tuple):
         state = state[0]
     
+    # Reset hidden state for Recurrent agents (RTD3)
+    if hasattr(agent, 'reset_hidden_state'):
+        agent.reset_hidden_state()
+    
     episode_reward = 0
     episode_pnl = 0
     step_count = 0
@@ -805,43 +809,194 @@ def plot_training_curves(metrics: TrainingMetrics, save_path: str = None):
     
     # Episode P&L
     ax2 = axes[0, 1]
-    ax2.plot(metrics.episode_pnls, alpha=0.6, label='Episode P&L')
+    ax2.plot(metrics.episode_pnls, alpha=0.6, color='green', label='Episode P&L')
     if len(metrics.episode_pnls) > 10:
         window = min(10, len(metrics.episode_pnls) // 5)
         moving_avg = pd.Series(metrics.episode_pnls).rolling(window=window).mean()
-        ax2.plot(moving_avg, 'r-', linewidth=2, label=f'{window}-ep Moving Avg')
+        ax2.plot(moving_avg, 'darkgreen', linewidth=2, label=f'{window}-ep Moving Avg')
     ax2.set_xlabel('Episode')
     ax2.set_ylabel('P&L')
     ax2.set_title('Training P&L')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     
-    # Validation metrics
+    # Critic Loss
     ax3 = axes[1, 0]
-    if metrics.validation_rewards:
-        ax3.plot(metrics.validation_rewards, 'g-', marker='o', label='Validation Reward')
-        ax3.plot(metrics.validation_pnls, 'b-', marker='s', label='Validation P&L')
-    ax3.set_xlabel('Validation Step')
-    ax3.set_ylabel('Value')
-    ax3.set_title('Validation Metrics')
+    ax3.plot(metrics.critic_losses, alpha=0.6, color='orange', label='Critic Loss')
+    ax3.set_xlabel('Update Step')
+    ax3.set_ylabel('Loss')
+    ax3.set_title('Critic Loss')
+    ax3.set_yscale('log')
     ax3.legend()
     ax3.grid(True, alpha=0.3)
     
-    # Exploration noise
+    # Validation Rewards
     ax4 = axes[1, 1]
-    ax4.plot(metrics.exploration_noise)
-    ax4.set_xlabel('Episode')
-    ax4.set_ylabel('Noise Level')
-    ax4.set_title('Exploration Noise Decay')
-    ax4.grid(True, alpha=0.3)
+    if metrics.validation_rewards:
+        ax4.plot(metrics.validation_rewards, 'o-', color='purple', label='Validation Reward')
+        ax4.set_xlabel('Validation Step')
+        ax4.set_ylabel('Reward')
+        ax4.set_title('Validation Performance')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+    else:
+        ax4.text(0.5, 0.5, 'No Validation Data', ha='center', va='center')
     
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=CONFIG.get("plot_dpi", 300))
+        plt.savefig(save_path)
         print(f"Training curves saved to {save_path}")
     
-    plt.show()
+    plt.close()
+
+# =============================================================================
+# RTD3 TRAINING FUNCTIONS
+# =============================================================================
+
+def train_episode_rtd3(agent, env, global_step=0):
+    """
+    Train RTD3 agent for a single episode (one trajectory).
+    Handles hidden state reset for RTD3.
+    """
+    reset_result = env.reset()
+    if isinstance(reset_result, tuple):
+        state = reset_result[0]
+    else:
+        state = reset_result
+        
+    # Reset hidden state for new episode
+    agent.reset_hidden_state()
+    
+    episode_reward = 0.0
+    losses = []
+    steps = 0
+    done = False
+    
+    warmup_steps = CONFIG.get("warmup_steps", 1000)
+    
+    while not done:
+        # Select action
+        if global_step + steps < warmup_steps:
+            action = env.action_space.sample()
+        else:
+            action = agent.select_action(state, add_noise=True)
+        
+        step_result = env.step(action)
+        if len(step_result) == 5:
+            next_state, reward, terminated, truncated, info = step_result
+            done = terminated or truncated
+        else:
+            next_state, reward, done, info = step_result
+        
+        # Store transition
+        agent.store_transition(state, action, reward, next_state, done)
+        
+        # Perform training step
+        if global_step + steps >= warmup_steps:
+            loss_info = agent.train_step()
+            if loss_info and loss_info[1] is not None:
+                losses.append(loss_info[1])
+        
+        episode_reward += reward
+        state = next_state
+        steps += 1
+    
+    return episode_reward, steps, losses
+
+
+def train_rtd3(
+    train_envs,
+    val_env=None,
+    num_epochs: int = None,
+    save_interval_epochs: int = 5,
+    save_path: str = None,
+    verbose: bool = True
+):
+    """
+    Train RTD3 agent on multiple environments (trajectories).
+    """
+    from rtd3_agent import RTD3Agent
+    
+    if len(train_envs) == 0:
+        raise ValueError("No training environments provided")
+    
+    if num_epochs is None:
+        num_epochs = CONFIG.get("num_epochs", 10)
+    if save_path is None:
+        save_path = CONFIG.get("model_save_path", "results/rtd3_model.pth")
+        
+    # Get dimensions from first environment
+    state_dim = train_envs[0].observation_space.shape[0]
+    action_dim = train_envs[0].action_space.shape[0]
+    
+    # Create RTD3 agent
+    agent = RTD3Agent(state_dim, action_dim)
+    
+    # Metrics tracking
+    metrics = TrainingMetrics()
+    
+    total_steps = 0
+    n_trajectories = len(train_envs)
+    
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"TRAINING RTD3 ON {n_trajectories} TRAJECTORIES for {num_epochs} EPOCHS")
+        print(f"{'='*60}")
+    
+    for epoch in range(num_epochs):
+        if verbose:
+            print(f"\nEpoch {epoch + 1}/{num_epochs}")
+            
+        # Shuffle environments
+        env_indices = np.random.permutation(n_trajectories)
+        
+        epoch_rewards = []
+        
+        for i, env_idx in enumerate(env_indices):
+            env = train_envs[env_idx]
+            
+            # Train one episode on this environment
+            episode_reward, episode_steps, episode_losses = train_episode_rtd3(
+                agent, env, total_steps
+            )
+            
+            total_steps += episode_steps
+            epoch_rewards.append(episode_reward)
+            
+            # Record metrics
+            loss = episode_losses[-1] if episode_losses else 0.0
+            metrics.add_episode(
+                reward=episode_reward,
+                pnl=0,
+                length=episode_steps,
+                actor_loss=0,
+                critic_loss=loss,
+                noise=agent.current_noise
+            )
+            
+            if verbose and (i + 1) % 100 == 0: # Print less frequently
+                progress = (i + 1) / n_trajectories * 100
+                print(f"  [{progress:5.1f}%] Trajectory {env_idx + 1}: Reward={episode_reward:.2f}, Steps={episode_steps}")
+        
+        if verbose:
+            print(f"  Epoch Avg Reward: {np.mean(epoch_rewards):.4f}")
+            
+        # Save periodic checkpoint
+        if save_path and (epoch + 1) % save_interval_epochs == 0:
+            checkpoint_path = save_path.replace(".pth", f"_epoch_{epoch+1}.pth")
+            agent.save(checkpoint_path)
+            if verbose:
+                print(f"  Saved checkpoint to {checkpoint_path}")
+                
+    # Final save
+    if save_path:
+        agent.save(save_path)
+        if verbose:
+            print(f"  Saved final model to {save_path}")
+    
+    return agent, metrics
+
     return fig
 
 

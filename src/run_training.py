@@ -108,6 +108,9 @@ USE_MODEL = CONFIG.get("model_type", "TD3")  # Options: "TD3" or "SAC"
 if USE_MODEL == "SAC":
     from sac_agent import SACAgent as Agent, device
     print(f"Using SAC Agent")
+elif USE_MODEL == "RTD3":
+    from rtd3_agent import RTD3Agent as Agent, device
+    print(f"Using RTD3 Agent")
 else:
     from td3_agent import TD3Agent as Agent, device
     print(f"Using TD3 Agent")
@@ -121,6 +124,7 @@ from data_loader import (
 )
 from trainer import (
     train_td3,
+    train_rtd3,
     train_multi_year,
     evaluate_agent,
     evaluate_agent_multi_episode,
@@ -244,10 +248,17 @@ def run_full_training_pipeline(
     CONFIG["model_save_path"] = model_save_path
     
     # Train using multi-environment approach (single pass, no validation)
-    agent, metrics = train_multi_env(
-        train_envs=train_envs,
-        verbose=verbose
-    )
+    if USE_MODEL == "RTD3":
+        agent, metrics = train_rtd3(
+            train_envs=train_envs,
+            verbose=verbose,
+            save_path=model_save_path
+        )
+    else:
+        agent, metrics = train_multi_env(
+            train_envs=train_envs,
+            verbose=verbose
+        )
     
     # Save model
     agent.save(model_save_path)
