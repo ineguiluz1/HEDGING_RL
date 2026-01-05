@@ -4,8 +4,8 @@
 #SBATCH --error=logs/optuna_td3_%A.err
 #SBATCH --time=23:00:00                # Time limit (23 hours)
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4              # Number of CPU cores per task
-#SBATCH --mem=16G                      # Memory per task
+#SBATCH --cpus-per-task=2              # Number of CPU cores per task
+#SBATCH --mem=4G                      # Memory per task
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=rtx3090
 #SBATCH --mail-type=BEGIN,END,FAIL     # Send email on job begin, end, and fail
@@ -32,8 +32,7 @@ echo "Python version: $(python --version)"
 echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
 echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
 
-# Change to src directory and run the script
-cd src
-python optuna_td3.py
+# Run the script from the project root directory
+python src/optuna_td3.py
 
 echo "Ending time: $(date)"

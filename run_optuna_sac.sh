@@ -32,8 +32,7 @@ echo "Python version: $(python --version)"
 echo "PyTorch version: $(python -c 'import torch; print(torch.__version__)')"
 echo "CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
 
-# Change to src directory and run the script
-cd src
-python optuna_sac.py
+# Run the script from the project root directory
+python src/optuna_sac.py
 
 echo "Ending time: $(date)"

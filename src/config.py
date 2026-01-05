@@ -111,7 +111,7 @@ CONFIG = {
     
     # Monte Carlo Parameters
     "use_montecarlo_training": True,               # Use MC trajectories for training
-    "mc_train_trajectories": 100,                  # Number of MC trajectories for training (increased for better learning)
+    "mc_train_trajectories": 500,                  # Number of MC trajectories for training (increased for better learning)
     "mc_episode_length": 30,                       # Episode length in trading days (30 = option expiry simulation)
     "mc_steps_per_year": 252,                      # Trading days per year (for annualization calculations)
     "test_start_year": 2004,                       # Start year for test data (real data)

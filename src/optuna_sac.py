@@ -381,7 +381,8 @@ def main():
     # =========================================================================
     # CONFIGURATION
     # =========================================================================
-    N_TRIALS = 100              # Total trials (1 baseline + 99 Optuna)
+    # N_TRIALS can be overridden by environment variable (useful for parallel workers)
+    N_TRIALS = 100  # Default: 100 trials
     STUDY_NAME = "sac_optimization"
     
     # Create output directory
@@ -426,7 +427,9 @@ def main():
     print("="*70)
     
     # Create or load study
-    sampler = TPESampler(seed=42)
+    # Note: For parallel optimization with multiple workers, we don't set a seed
+    # This allows different workers to explore different regions of hyperparameter space
+    sampler = TPESampler()
     study = optuna.create_study(
         study_name=STUDY_NAME,
         storage=storage,
@@ -445,7 +448,28 @@ def main():
     else:
         # Run baseline trial first (separate from Optuna optimization)
         print("\nStarting fresh study...")
-        baseline_results = run_baseline_trial(study, train_envs=train_envs, test_envs=test_envs)
+        
+        # Check if baseline has already been run by another worker
+        # Use study.user_attrs as a shared flag (thread-safe with SQLite)
+        try:
+            if not study.user_attrs.get('baseline_completed', False):
+                # Try to claim the baseline execution
+                study.set_user_attr('baseline_running', True)
+                
+                # Double-check no one else started it (race condition protection)
+                if not study.user_attrs.get('baseline_completed', False):
+                    baseline_results = run_baseline_trial(study, train_envs=train_envs, test_envs=test_envs)
+                    study.set_user_attr('baseline_completed', True)
+                    study.set_user_attr('baseline_results', baseline_results)
+                    print("✓ Baseline completed by this worker")
+                else:
+                    print("✓ Baseline already completed by another worker")
+            else:
+                print("✓ Baseline already completed in a previous run")
+        except Exception as e:
+            print(f"⚠ Warning: Could not run baseline: {e}")
+            print("  Continuing with optimization trials...")
+        
         # Baseline doesn't count against N_TRIALS - all N_TRIALS will be Optuna trials
         # This gives you: 1 baseline + N_TRIALS optimized = N_TRIALS + 1 total runs
     
