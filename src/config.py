@@ -14,7 +14,7 @@ CONFIG = {
     
     # Reward Function Configuration
     # Options: "delta_tracking", "variance_minimization", "cara_utility", "profit_seeking"
-    "reward_type": "cara_utility",        # Track BS delta as primary objective
+    "reward_type": "variance_minimization",        # Track BS delta as primary objective
     "delta_tracking_weight": 0.1,           # Weight for tracking error (main component)
     "pnl_variance_weight": 2.0,             # Weight for P&L variance (secondary)
     "transaction_cost_weight": 1.0,         # Weight for transaction cost penalty (teaches cost of rebalancing)

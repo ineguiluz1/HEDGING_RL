@@ -112,7 +112,26 @@ def export_all_plots(study: optuna.Study, output_dir: Path, prefix: str = ""):
     # 3. Parallel Coordinate Plot
     try:
         print("  Generating parallel coordinate plot...")
-        fig = plot_parallel_coordinate(study)
+        # Get parameter names from trials
+        if study.trials and len(study.trials) > 0:
+            param_names = list(study.best_trial.params.keys())
+            # Limit to most important parameters (max 10 for readability)
+            if len(param_names) > 10:
+                # Try to get importances and select top parameters
+                try:
+                    importances = optuna.importance.get_param_importances(study)
+                    sorted_params = sorted(importances.items(), key=lambda x: x[1], reverse=True)
+                    selected_params = [p[0] for p in sorted_params[:10]]
+                except:
+                    # If importances fail, just take first 10 params
+                    selected_params = param_names[:10]
+            else:
+                selected_params = param_names
+            
+            fig = plot_parallel_coordinate(study, params=selected_params)
+        else:
+            fig = plot_parallel_coordinate(study)
+        
         filepath = output_dir / f"{prefix}parallel_coordinate.html"
         fig.write_html(str(filepath))
         plots_generated.append(("Parallel Coordinate", filepath))
