@@ -1,0 +1,38 @@
+{
+  "best_params": {
+    "actor_lr": 1.3558042521091336e-05,
+    "critic_lr": 1.5308776636966434e-05,
+    "gamma": 0.966166837040296,
+    "tau": 0.009680090990568168,
+    "policy_noise": 0.2141483866821121,
+    "noise_clip": 0.39765754116273866,
+    "policy_freq": 2,
+    "hidden_dim": 256,
+    "batch_size": 1024,
+    "replay_buffer_size": 200000,
+    "initial_noise": 0.5397035564438747,
+    "final_noise": 0.131010489464314,
+    "ou_theta": 0.20488351080909167,
+    "ou_sigma": 0.5859280157466885,
+    "warmup_steps": 6000,
+    "delta_tracking_weight": 0.015799246618784842,
+    "pnl_variance_weight": 4.3326043985534985,
+    "transaction_cost_weight": 1.5340282595386399,
+    "reward_scale": 263.63230891167916,
+    "risk_aversion": 0.021007386546204116,
+    "max_action": 0.13819313334390992
+  },
+  "best_value": 0.12550694333395548,
+  "best_trial_number": 38,
+  "best_trial_metrics": {
+    "episodes_trained": 5403,
+    "max_drawdown": 1.1053936902351262,
+    "pnl_improvement": 0.5526897548739251,
+    "sharpe_improvement": 0.11998004578521623,
+    "sharpe_ratio": -0.21635170380541038,
+    "total_pnl": -0.7257607613256205,
+    "training_reward": -1.452467056065719
+  },
+  "n_trials": 100,
+  "timestamp": "2026-01-05T03:44:16.351901"
+}

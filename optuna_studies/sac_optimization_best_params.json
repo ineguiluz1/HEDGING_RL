@@ -1,0 +1,37 @@
+{
+  "best_params": {
+    "sac_learning_rate": 5.911113135535791e-05,
+    "gamma": 0.9559048588670004,
+    "tau": 0.003768074972333664,
+    "use_auto_entropy": false,
+    "sac_use_sde": true,
+    "sac_sde_sample_freq": 4,
+    "hidden_dim": 256,
+    "batch_size": 256,
+    "replay_buffer_size": 50000,
+    "sac_gradient_steps": 3,
+    "sac_train_freq": 7,
+    "delta_tracking_weight": 0.056014538349971325,
+    "pnl_variance_weight": 0.5572166289833438,
+    "transaction_cost_weight": 2.5834685747135633,
+    "reward_scale": 225.95499311019066,
+    "risk_aversion": 0.02111266341601811,
+    "max_action": 0.4469160098925796,
+    "warmup_steps": 4800,
+    "sac_ent_coef": 0.28049032065856055,
+    "sac_target_entropy": "auto"
+  },
+  "best_value": 0.11485600936149293,
+  "best_trial_number": 6,
+  "best_trial_metrics": {
+    "episodes_trained": 3699,
+    "max_drawdown": 1.154830512603667,
+    "pnl_improvement": 0.5065421530121904,
+    "sharpe_improvement": 0.10979058783137102,
+    "sharpe_ratio": -0.2265411617592556,
+    "total_pnl": -0.7719083631873552,
+    "training_reward": -1.1353987650262696
+  },
+  "n_trials": 100,
+  "timestamp": "2026-01-05T02:36:51.829748"
+}
