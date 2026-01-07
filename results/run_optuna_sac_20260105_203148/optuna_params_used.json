@@ -1,0 +1,22 @@
+{
+  "sac_learning_rate": 5.911113135535791e-05,
+  "gamma": 0.9559048588670004,
+  "tau": 0.003768074972333664,
+  "use_auto_entropy": false,
+  "sac_use_sde": true,
+  "sac_sde_sample_freq": 4,
+  "hidden_dim": 256,
+  "batch_size": 256,
+  "replay_buffer_size": 50000,
+  "sac_gradient_steps": 3,
+  "sac_train_freq": 7,
+  "delta_tracking_weight": 0.056014538349971325,
+  "pnl_variance_weight": 0.5572166289833438,
+  "transaction_cost_weight": 2.5834685747135633,
+  "reward_scale": 225.95499311019066,
+  "risk_aversion": 0.02111266341601811,
+  "max_action": 0.4469160098925796,
+  "warmup_steps": 4800,
+  "sac_ent_coef": 0.28049032065856055,
+  "sac_target_entropy": "auto"
+}
